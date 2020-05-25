@@ -64,7 +64,7 @@ private:
         timer(io_context) {
     timer.expires_from_now(boost::posix_time::microseconds(0));
     setupTimer();
-    opened_closed(true);
+    Telescope::opened_closed(true);
   }
   ~TelescopeDummy(void) {
     opened_closed(false);
@@ -76,8 +76,12 @@ private:
     goto_pos_dec = dec_int;
   }
   void guide(int d_ra_micros,int d_dec_micros) override {
+    std::cout << "TelescopeDummy::guide("
+              << d_ra_micros << ',' << d_dec_micros << ')' << std::endl;
   }
   void move(short int horz,short int vert,unsigned int micros) override {
+    std::cout << "TelescopeDummy::move("
+              << horz << ',' << vert << ';' << micros << ')' << std::endl;
   }
   boost::asio::deadline_timer timer;
   unsigned int pos_ra = 0;
