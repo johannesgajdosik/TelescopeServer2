@@ -20,6 +20,7 @@ A single binary will be able to controll different variants of mounts (currently
 you choose via commandline like:
 
   ./TelescopeServer2 10000 iOptron:/dev/ttyUSB0
+
   ./TelescopeServer2 10001 Dummy
 
 I plan to add at least LX200 support to TelescopeServer2 (so that I can control both scopes via joystick),
