@@ -1,0 +1,5 @@
+*.o
+*.d
+TelescopeServer2
+TelescopeClient2
+TelescopeJoystickClient
