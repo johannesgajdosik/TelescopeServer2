@@ -372,6 +372,13 @@ void TelescopeIOptron::recvRsp(std::function<int(void)> &&rsp_data_received) {
           initialize();
           return;
         }
+        if (error == boost::asio::error::operation_aborted) {
+//          std::cout << PrintTime() << " "
+//                       "TelescopeIOptron::recvRsp::l: "
+//                       "canceled" << std::endl;
+          init();
+          return;
+        }
         std::cout << PrintTime() << " "
                      "TelescopeIOptron::recvRsp::l: read failed: "
                   << error.message() << std:: endl;
@@ -524,7 +531,7 @@ void TelescopeIOptron::initialize(void) {
   serial.set_option(boost::asio::serial_port_base::parity(boost::asio::serial_port_base::parity::none));
   serial.set_option(boost::asio::serial_port_base::flow_control(boost::asio::serial_port_base::flow_control::none));
   std::cout << PrintTime() << " "
-               "TelescopeIOptron::initialize: serial port " << args << "opened" << std::endl;
+               "TelescopeIOptron::initialize: serial port " << args << " opened" << std::endl;
   initPrecessionMatrix();
   init(0);
 }
@@ -589,10 +596,10 @@ private:
     drain_deadline.expires_from_now(boost::posix_time::microseconds(drain_micros));
     drain_deadline.async_wait(
       [t = &telescope](const boost::system::error_code &error) {
-        std::cout << PrintTime() << " "
-                     "TelescopeIOptron::CommandInit::sendStopRqu::l: "
-                     "draining deadline reached, " << error.message()
-                  << std:: endl;
+//        std::cout << PrintTime() << " "
+//                     "TelescopeIOptron::CommandInit::sendStopRqu::l: "
+//                     "draining deadline reached, " << error.message()
+//                  << std:: endl;
           // cancel serial read/write requests regardless of error:
         boost::system::error_code ec;
         t->serial.cancel(ec);
@@ -625,10 +632,10 @@ private:
             return;
           }
           if (error == boost::asio::error::operation_aborted) {
-            std::cout << PrintTime() << " "
-                         "TelescopeIOptron::CommandInit::recvStopRsp::l: "
-                         "draining finished"
-                      << std:: endl;
+//            std::cout << PrintTime() << " "
+//                         "TelescopeIOptron::CommandInit::recvStopRsp::l: "
+//                         "draining finished"
+//                      << std:: endl;
             telescope.recv_used = 0;
             sendMountInfoRqu();
             return;

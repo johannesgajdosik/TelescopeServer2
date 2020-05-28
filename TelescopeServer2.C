@@ -104,9 +104,12 @@ void SignalHandler(boost::asio::signal_set &signals,
   if (error) {
       // handler was cancelled?
   } else {
-    signals.async_wait(boost::bind(SignalHandler,boost::ref(signals),_1,_2));
-    std::cout << PrintTime() << " "
-                 "signal " << signal_number << " received" << std::endl;
+    signals.async_wait(std::bind(SignalHandler,boost::ref(signals),std::placeholders::_1,std::placeholders::_2));
+//    std::cout << PrintTime() << " "
+//                 "signal " << signal_number << " received, "
+//                 "throwing nullptr in order to stop "
+//                 "boost::asio::io_context::run()."
+//              << std::endl;
     continue_looping = false;
     throw nullptr;
   }
@@ -118,7 +121,7 @@ int main(int argc,char *argv[]) {
     boost::asio::io_context io_context;
 
     boost::asio::signal_set signals(io_context,SIGINT,SIGTERM);
-    signals.async_wait(boost::bind(SignalHandler,boost::ref(signals),_1,_2));
+    signals.async_wait(std::bind(SignalHandler,boost::ref(signals),std::placeholders::_1,std::placeholders::_2));
 
     int port;
     if (argc < 3 || !(std::istringstream(argv[1])>>port) ||
@@ -140,17 +143,18 @@ int main(int argc,char *argv[]) {
                                     },
                                     io_context);
       if (telescope) {
-//        try {
+        try {
           io_context.run();
 //        } catch (std::exception &e) {
 //          std::cerr << PrintTime() << " "
 //                       "Exception: " << e.what() << std::endl;
 //          abort();
-//        } catch (std::nullptr_t &) {
-//          if (!continue_looping) break;
-//          std::cerr << PrintTime() << " "
-//                       "unrecoverable error" << std::endl;
-//        }
+        } catch (std::nullptr_t &) {
+          if (continue_looping) {
+            std::cerr << PrintTime() << " "
+                         "who throws nullptr?" << std::endl;
+          }
+        }
         telescope.reset();
       }
       // TODO: the serial connection is destroyed after the telescope.

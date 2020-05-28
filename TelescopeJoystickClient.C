@@ -94,33 +94,49 @@ static std::unique_ptr<boost::asio::deadline_timer> joystick_deadline;
 
 static short int value_x = 0;
 static short int value_y = 0;
+static short int curr_x = 0;
+static short int curr_y = 0;
 static unsigned int buttons = 0;
 
 
 static void SendMsgMove(void) {
-  SendMsgMove(value_x,value_y,1000000);
-  if (value_x == 0 && value_y == 0) return;
+  SendMsgMove(curr_x,curr_y,1000000);
   if (!joystick_deadline) return;
-  joystick_deadline->expires_from_now(boost::posix_time::microseconds(500000));
-  joystick_deadline->async_wait(
-                       [](const boost::system::error_code &e) {
-                         if (e) return;
-                         SendMsgMove();
-                       });
+  joystick_deadline->cancel();
+  if (curr_x != 0 || curr_y != 0) {
+    joystick_deadline->expires_from_now(boost::posix_time::microseconds(500000));
+    joystick_deadline->async_wait(
+                         [](const boost::system::error_code &e) {
+                           if (e) return;
+                           SendMsgMove();
+                         });
+  }
+}
+
+static void JoystickChanged(void) {
+  const int b = std::min(9, (int)buttons);
+  const short int x = (b * value_x) / 9;
+  const short int y = (b * value_y) / 9;
+  const bool changed = (curr_x != x || curr_y != y);
+  curr_x = x;
+  curr_y = y;
+  if (changed) SendMsgMove();
 }
 
 static void HandleJoystickEvent(const struct js_event &event) {
   switch (event.type) {
     case JS_EVENT_BUTTON:
-      if ((unsigned int)event.number < 32) {
+      std::cout << PrintTime() << " "
+                   "button " << (unsigned int)event.number << ": " << event.value
+                << ", buttons: " << buttons << std::endl;
+      if ((unsigned int)event.number < 4) {
         if (event.value != 0) {
           buttons |= 1u << ((unsigned int)event.number);
         } else {
           buttons &= ~(1u << ((unsigned int)event.number));
         }
+        JoystickChanged();
       }
-      std::cout << PrintTime() << " "
-                   "button " << (unsigned int)event.number << ": " << event.value << std::endl;
       break;
     case JS_EVENT_AXIS:
       std::cout << PrintTime() << " "
@@ -132,18 +148,8 @@ static void HandleJoystickEvent(const struct js_event &event) {
             // right is +
           std::cout << PrintTime() << " "
                        "x: " << event.value << std::endl;
-          if (event.value == 0) {
-            value_x = 0;
-            SendMsgMove();
-          } else {
-            int x = buttons & 15;
-            if (x) {
-              if (x > 9) x = 9;
-              value_x = (x*event.value)/9;
-              SendMsgMove();
-            }
-          }
-          SendMsgMove();
+          value_x = event.value;
+          JoystickChanged();
           break;
         case 1:
         case 2:
@@ -151,17 +157,8 @@ static void HandleJoystickEvent(const struct js_event &event) {
             // down is +
           std::cout << PrintTime() << " "
                        "y: " << event.value << std::endl;
-          if (event.value == 0) {
-            value_y = 0;
-            SendMsgMove();
-          } else {
-            short int x = buttons & 15;
-            if (x) {
-              if (x > 9) x = 9;
-              value_y = (x*event.value)/9;
-              SendMsgMove();
-            }
-          }
+          value_y = event.value;
+          JoystickChanged();
           break;
       }
       break;
