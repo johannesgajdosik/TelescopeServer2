@@ -799,8 +799,8 @@ void TelescopeIOptron::locationReceived(unsigned int longitude_ioptron,unsigned 
                  "TelescopeIOptron::locationReceived: new location ("
               << PrintRaInt(longitude_int) << ','
               << PrintDecInt(latitude_int) << ')' << std::endl;
-    SetLongLat(longitude_int*(2*M_PI/2147483648.0),
-               latitude_int*(2*M_PI/2147483648.0),
+    SetLongLat(longitude_int*(M_PI/2147483648.0),
+               latitude_int*(M_PI/2147483648.0),
                geographic_pos_orientation);
   }
 }
