@@ -1,4 +1,4 @@
-TelescopeServer2_SOURCES = TelescopeServer2.C PrintRaDec.C Time.C Telescope.C TelescopeDummy.C TelescopeIOptron.C
+TelescopeServer2_SOURCES = TelescopeServer2.C PrintRaDec.C Time.C Telescope.C TelescopeDummy.C TelescopeIOptron.C TelescopeLX200.C
 
 TelescopeServer2_OBJECTS = $(patsubst %.c,%.o,$(patsubst %.C,%.o,$(TelescopeServer2_SOURCES)))
 

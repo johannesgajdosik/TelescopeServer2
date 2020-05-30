@@ -19,6 +19,49 @@
 
 #include "PrintRaDec.H"
 
+std::ostream &operator<<(std::ostream &o,const PrintRaSeconds &x) {
+  char buff[9];
+  char *p = buff + sizeof(buff);
+  unsigned int i = x.ra_secs / 10;
+  *--p = '\0';
+  *--p = '0' + x.ra_secs - 10*i;
+  unsigned int j = i / 6;
+  *--p = '0' + i - 6*j;
+  *--p = 'm';
+  i = j/10;
+  *--p = '0' + j - 10*i;
+  j = i/6;
+  *--p = '0' + i - 6*j;
+  *--p = 'h';
+  i = j/10;
+  *--p = '0' + j - 10*i;
+  *--p = '0' + i;
+  if (i>2) abort();
+  return o << buff;
+};
+
+std::ostream &operator<<(std::ostream &o,const PrintDecSeconds &x) {
+  char buff[10];
+  char *p = buff + sizeof(buff);
+  unsigned int i = x.dec_secs / 10;
+  *--p = '\0';
+  *--p = '0' + x.dec_secs - 10*i;
+  unsigned int j = i / 6;
+  *--p = '0' + i - 6*j;
+  *--p = 'm';
+  i = j/10;
+  *--p = '0' + j - 10*i;
+  j = i/6;
+  *--p = '0' + i - 6*j;
+  *--p = 'd';
+  i = j/10;
+  *--p = '0' + j - 10*i;
+  *--p = '0' + i;
+  if (i>9) abort();
+  buff[0] = (x.dec_sign?'-':'+');
+  return o << buff;
+}
+
 std::ostream &operator<<(std::ostream &o,const PrintRaMilliseconds &x) {
   char buff[13];
   char *p = buff + sizeof(buff);
@@ -45,21 +88,6 @@ std::ostream &operator<<(std::ostream &o,const PrintRaMilliseconds &x) {
   *--p = '0' + i;
   if (i>2) abort();
   return o << buff;
-/*
-  unsigned int hours = x.ra_millis/1000;
-  const unsigned int milliseconds = x.ra_millis - hours*1000;
-  unsigned int i = hours;
-  hours = i/60;
-  const unsigned int seconds = i - hours*60;
-  i = hours;
-  hours = i/60;
-  const unsigned int minutes = i - hours*60;
-  o << std::setw(2) << std::setfill('0') << hours << 'h'
-    << std::setw(2) << std::setfill('0') << minutes << 'm'
-    << std::setw(2) << std::setfill('0') << seconds << 's'
-    << std::setw(3) << std::setfill('0') << milliseconds;
-  return o;
-*/
 };
 
 std::ostream &operator<<(std::ostream &o,const PrintDecCentiseconds &x) {
@@ -87,22 +115,5 @@ std::ostream &operator<<(std::ostream &o,const PrintDecCentiseconds &x) {
   if (i>9) abort();
   buff[0] = (x.dec_sign?'-':'+');
   return o << buff;
-/*
-
-  unsigned int degrees = x.dec_centis/100;
-  const unsigned int centiseconds = x.dec_centis - degrees*100;
-  unsigned int i = degrees;
-  degrees = i/60;
-  const unsigned int seconds = i - degrees*60;
-  i = degrees;
-  degrees = i/60;
-  const unsigned int minutes = i - degrees*60;
-  o << (x.dec_sign?'-':'+')
-    << std::setw(2) << std::setfill('0') << degrees << 'd'
-    << std::setw(2) << std::setfill('0') << minutes << 'm'
-    << std::setw(2) << std::setfill('0') << seconds << 's'
-    << std::setw(2) << std::setfill('0') << centiseconds;
-  return o;
-*/
 }
 

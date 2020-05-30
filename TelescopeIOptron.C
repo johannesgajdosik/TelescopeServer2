@@ -722,11 +722,11 @@ private:
               << std::string(telescope.recv_buf+6,6)
               << std::endl;
     telescope.getLoc();
-    telescope.commandFinished();
     if (!telescope.telescope_online) {
       telescope.telescope_online = true;
       telescope.opened_closed(true);
     }
+    telescope.commandFinished();
     return 1;
   }
 private:
@@ -990,7 +990,7 @@ void TelescopeIOptron::positionReceived(const IOptronRaDec &ra_dec) {
                  "TelescopeIOptron::positionReceived" << ra_dec << ": "
                  "J2000(Ra:" << PrintRaInt(ra_int_j2000)
               << ",Dec:" << PrintDecInt(dec_int_j2000) << "): "
-                 "geographic location unknown, cannot check whether position forbidden"
+                 "geographic location unknown, cannot check for forbidden position"
               << std::endl;
   } else {
     const unsigned int W_int = (unsigned int)((unsigned long long int)(W*4294967296.0+0.5));
@@ -1149,8 +1149,8 @@ private:
   int recvDecRsp(void) {
     if (telescope.recv_buf[0] != '1') {
       std::cout << PrintTime() << " "
-                   "TelescopeIOptron::CommandGoto" << ra_dec << "::recvDecRsp("
-                << std::string(telescope.recv_buf,telescope.recv_used) << "): "
+                   "TelescopeIOptron::CommandGoto" << ra_dec << "::recvDecRsp \""
+                << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
                    "Sd: Bad Response" << std::endl;
       return -1;
     }
@@ -1168,8 +1168,8 @@ private:
   int recvRaRsp(void) {
     if (telescope.recv_buf[0] != '1') {
       std::cout << PrintTime() << " "
-                   "TelescopeIOptron::CommandGoto" << ra_dec << "::recvRaRsp("
-                << std::string(telescope.recv_buf,telescope.recv_used) << "): "
+                   "TelescopeIOptron::CommandGoto" << ra_dec << "::recvRaRsp \""
+                << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
                    "Sr: Bad Response" << std::endl;
       return -1;
     }
@@ -1187,22 +1187,22 @@ private:
     switch (telescope.recv_buf[0]) {
       case '1':
 //          std::cout << PrintTime() << " "
-//                       "TelescopeIOptron::CommandGoto" << ra_dec << "::recvGotoRsp("
-//                    << std::string(telescope.recv_buf,recv_used) << "): "
+//                       "TelescopeIOptron::CommandGoto" << ra_dec << "::recvGotoRsp \""
+//                    << std::string(telescope.recv_buf,recv_used) << "\": "
 //                       "GOTO ok."
 //                    << std::endl;
         break;
       case '0':
         std::cout << PrintTime() << " "
-                     "TelescopeIOptron::CommandGoto" << ra_dec << "::recvGotoRsp("
-                  << std::string(telescope.recv_buf,telescope.recv_used) << "): "
+                     "TelescopeIOptron::CommandGoto" << ra_dec << "::recvGotoRsp \""
+                  << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
                      "GOTO not ok. The desired object is below 0 degrees altitude."
                   << std::endl;
         break;
       default:
         std::cout << PrintTime() << " "
-                     "TelescopeIOptron::CommandGoto" << ra_dec << "::recvGotoRsp("
-                  << std::string(telescope.recv_buf,telescope.recv_used) << "): "
+                     "TelescopeIOptron::CommandGoto" << ra_dec << "::recvGotoRsp \""
+                  << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
                      "MS: Bad Response" << std::endl;
         return -1;
     }
@@ -1213,6 +1213,34 @@ private:
   IOptronRaDec ra_dec;
   char buf[13];
 };
+
+void TelescopeIOptron::gotoPosition(const IOptronRaDec &ra_dec) {
+  std::cout << PrintTime() << " "
+               "TelescopeIOptron::gotoPosition" << ra_dec << std::endl;
+  if (!next_command_goto) {
+    next_command_goto = std::make_unique<CommandGoto>(*this);
+  }
+  next_command_goto->set(ra_dec);
+  doSomething();
+}
+
+void TelescopeIOptron::gotoPosition(const unsigned int ra_int_j2000,const int dec_int_j2000) {
+//    if (dec_int_j2000 < -0x40000000 || dec_int_j2000 > 0x40000000) abort();
+
+  const Vector<double,3> v0 = PolarToRect( ra_int_j2000 * (M_PI/2147483648.0),
+                                          dec_int_j2000 * (M_PI/2147483648.0) );
+  const Vector<double,3> v = v0*precession_matrix;
+  double ra,dec;
+  RectToPolar(v,ra,dec);
+  if (dec < -0.5*M_PI || dec > 0.5*M_PI) abort();
+  IOptronRaDec ra_dec( (unsigned int)floor(0.5+ ra*(2147483648.0/M_PI)),
+                                (int)floor(0.5+dec*(2147483648.0/M_PI)) );
+  gotoPosition(ra_dec);
+}
+
+//------------------------------------------------------------------------
+
+
 
 
 class TelescopeIOptron::CommandMove : public TelescopeIOptron::Command {
@@ -1299,8 +1327,8 @@ private:
   int recvSpeedRsp(void) {
     if (telescope.recv_buf[0] != '1') {
       std::cout << PrintTime() << " "
-                   "TelescopeIOptron::CommandMove(" << horz << ',' << vert << ")::recvSpeedRsp("
-                << std::string(telescope.recv_buf,telescope.recv_used) << "): "
+                   "TelescopeIOptron::CommandMove(" << horz << ',' << vert << ")::recvSpeedRsp \""
+                << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
                    "Bad Response" << std::endl;
       return -1;
     }
@@ -1314,8 +1342,8 @@ private:
   int recvStopRsp(void) {
     if (telescope.recv_buf[0] != '1') {
       std::cout << PrintTime() << " "
-                   "TelescopeIOptron::CommandMove(" << horz << ',' << vert << ")::recvStopRsp("
-                << std::string(telescope.recv_buf,telescope.recv_used) << "): "
+                   "TelescopeIOptron::CommandMove(" << horz << ',' << vert << ")::recvStopRsp \""
+                << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
                    "Bad Response" << std::endl;
       return -1;
     }
@@ -1350,8 +1378,8 @@ private:
   int recvHorzStopRsp(void) {
     if (telescope.recv_buf[0] != '1') {
       std::cout << PrintTime() << " "
-                   "TelescopeIOptron::CommandMove(" << horz << ',' << vert << ")::recvHorzStopRsp("
-                << std::string(telescope.recv_buf,telescope.recv_used) << "): "
+                   "TelescopeIOptron::CommandMove(" << horz << ',' << vert << ")::recvHorzStopRsp \""
+                << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
                    "Bad Response" << std::endl;
       return -1;
     }
@@ -1385,8 +1413,8 @@ std::cout << "vertRqu: " << buf << std::endl;
   int recvVertStopRsp(void) {
     if (telescope.recv_buf[0] != '1') {
       std::cout << PrintTime() << " "
-                   "TelescopeIOptron::CommandMove(" << vert << ',' << vert << ")::recvVertStopRsp("
-                << std::string(telescope.recv_buf,telescope.recv_used) << "): "
+                   "TelescopeIOptron::CommandMove(" << vert << ',' << vert << ")::recvVertStopRsp \""
+                << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
                    "Bad Response" << std::endl;
       return -1;
     }
@@ -1400,6 +1428,26 @@ private:
   short int speed = 0;
   char buf[5];
 };
+
+void TelescopeIOptron::move(short int horz,short int vert,
+          unsigned int validity_micros) {
+  if (!next_command_move) {
+    next_command_move = std::make_unique<CommandMove>(*this);
+  }
+  next_command_move->accumulate(horz,vert,validity_micros);
+  next_command_goto.reset();
+  doSomething();
+}
+
+
+
+//------------------------------------------------------------------------
+
+
+
+
+
+
 
 class TelescopeIOptron::CommandGuide  : public TelescopeIOptron::Command {
 public:
@@ -1456,30 +1504,6 @@ private:
   char buf[9];
 };
 
-
-  void TelescopeIOptron::gotoPosition(const IOptronRaDec &ra_dec) {
-    std::cout << PrintTime() << " "
-                 "TelescopeIOptron::gotoPosition(" << ra_dec << ')' << std::endl;
-    if (!next_command_goto) {
-      next_command_goto = std::make_unique<CommandGoto>(*this);
-    }
-    next_command_goto->set(ra_dec);
-    doSomething();
-  }
-
-void TelescopeIOptron::gotoPosition(const unsigned int ra_int_j2000,const int dec_int_j2000) {
-//    if (dec_int_j2000 < -0x40000000 || dec_int_j2000 > 0x40000000) abort();
-
-  const Vector<double,3> v0 = PolarToRect( ra_int_j2000 * (M_PI/2147483648.0),
-                                          dec_int_j2000 * (M_PI/2147483648.0) );
-  const Vector<double,3> v = v0*precession_matrix;
-  double ra,dec;
-  RectToPolar(v,ra,dec);
-  if (dec < -0.5*M_PI || dec > 0.5*M_PI) abort();
-  IOptronRaDec ra_dec( (unsigned int)floor(0.5+ ra*(2147483648.0/M_PI)),
-                                (int)floor(0.5+dec*(2147483648.0/M_PI)) );
-  gotoPosition(ra_dec);
-}
 void TelescopeIOptron::guide(int d_ra_micros,int d_dec_micros) {
   if (!next_command_guide) {
     next_command_guide = std::make_unique<CommandGuide>(*this);
@@ -1487,15 +1511,11 @@ void TelescopeIOptron::guide(int d_ra_micros,int d_dec_micros) {
   next_command_guide->accumulate(d_ra_micros,d_dec_micros);
   doSomething();
 }
-void TelescopeIOptron::move(short int horz,short int vert,
-          unsigned int validity_micros) {
-  if (!next_command_move) {
-    next_command_move = std::make_unique<CommandMove>(*this);
-  }
-  next_command_move->accumulate(horz,vert,validity_micros);
-  next_command_goto.reset();
-  doSomething();
-}
+
+
+//------------------------------------------------------------------------
+
+
 
 
 void TelescopeIOptron::init(unsigned int drain_micros) {

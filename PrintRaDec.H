@@ -23,16 +23,36 @@
 #include <iostream>
 #include <cmath> // floor
 
+struct PrintRaSeconds {
+  const unsigned int ra_secs;
+  PrintRaSeconds(unsigned int ra_secs) : ra_secs(ra_secs) {}
+};
+
+std::ostream &operator<<(std::ostream &o,const PrintRaSeconds &x);
+
+struct PrintDecSeconds {
+  const bool dec_sign;
+  const unsigned int dec_secs;
+  PrintDecSeconds(bool dec_sign,unsigned int dec_secs)
+      : dec_sign(dec_sign),dec_secs(dec_secs) {
+    if (dec_secs > 90*3600) abort();
+  }
+};
+
+std::ostream &operator<<(std::ostream &o,const PrintDecSeconds &x);
+
+
+
 struct PrintRaMilliseconds {
   const unsigned int ra_millis;
   PrintRaMilliseconds(unsigned int ra_millis) : ra_millis(ra_millis) {}
 };
 
+std::ostream &operator<<(std::ostream &o,const PrintRaMilliseconds &x);
+
 struct PrintRaInt : public PrintRaMilliseconds {
   PrintRaInt(unsigned int ra_int) : PrintRaMilliseconds( (ra_int*86400000ULL + 0x80000000ULL)>>32 ) {}
 };
-
-std::ostream &operator<<(std::ostream &o,const PrintRaMilliseconds &x);
 
 static inline
 unsigned int RadiantToRaMillis(double ra_rad) {
