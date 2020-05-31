@@ -100,17 +100,31 @@ static unsigned int buttons = 0;
 
 
 static void SendMsgMove(void) {
+//std::cout << "SendMsgMove 000" << std::endl;
   SendMsgMove(curr_x,curr_y,1000000);
+//std::cout << "SendMsgMove 010" << std::endl;
   if (!joystick_deadline) return;
-  joystick_deadline->cancel();
-  if (curr_x != 0 || curr_y != 0) {
+//std::cout << "SendMsgMove 020" << std::endl;
+  if (curr_x == 0 && curr_y == 0) {
+//std::cout << "SendMsgMove 100" << std::endl;
+    joystick_deadline->cancel();
+  } else {
+//std::cout << PrintTime() << " "
+//                   "SendMsgMove 200" << std::endl;
     joystick_deadline->expires_from_now(boost::posix_time::microseconds(500000));
     joystick_deadline->async_wait(
                          [](const boost::system::error_code &e) {
-                           if (e) return;
+                           if (e) {
+//std::cout << PrintTime() << " "
+//             "SendMsgMove::l " << e.message() << std::endl;
+                             return;
+                           }
+//std::cout << PrintTime() << " "
+//             "SendMsgMove::l deadline reached" << std::endl;
                            SendMsgMove();
                          });
   }
+//std::cout << "SendMsgMove 999" << std::endl;
 }
 
 static void JoystickChanged(void) {

@@ -429,9 +429,6 @@ void TelescopeIOptron::sendMsg(const char *data,int size,
         std::cout << PrintTime() << " "
                      "TelescopeIOptron::sendMsg::l: write failed: "
                   << error.message() << std:: endl;
-//2020.05.25-10:47:05.785 TelescopeIOptron::sendMsg::l: write failed: Input/output error
-//(gdb) p error
-//$1 = (const boost::system::error_code &) @0x7fffffffd738: {val_ = 5, failed_ = true, cat_ = 0x67ce30 <boost::system::system_category()::system_category_instance>}
         init();
         return;
       }
@@ -1041,6 +1038,7 @@ void TelescopeIOptron::positionReceived(const IOptronRaDec &ra_dec) {
   }
 }
 
+
 class TelescopeIOptron::CommandGetPos : public TelescopeIOptron::Command {
 public:
   CommandGetPos(TelescopeIOptron &telescope) : Command(telescope) {}
@@ -1265,7 +1263,6 @@ public:
     if (horz == -0x8000) {
       horz = telescope.curr_horz;
     } else {
-        // range -9..+9
       horz = Rescale9(horz);
     }
     if (vert == -0x8000) {
@@ -1283,7 +1280,7 @@ public:
       telescope.move_deadline.expires_from_now(boost::posix_time::microseconds(micros));
       telescope.move_deadline.async_wait(
         [t = &telescope](const boost::system::error_code &e) {
-          std::cout << "CommandMove::move_deadline_l: " << e.message() << std::endl;
+//          std::cout << "CommandMove::move_deadline_l: " << e.message() << std::endl;
           if (e) return; // timer was cancelled
           std::cout << "CommandMove::move_deadline_l: stopping movement" << std::endl;
           t->move(0,0,0);
@@ -1401,8 +1398,6 @@ private:
       buf[1] = 'm';
         // vert > 0: down, south
       buf[2] = (vert < 0) ? 's' : 'n'; // :mn# actually moves south
-      buf[5] = '\0';
-std::cout << "vertRqu: " << buf << std::endl;
       telescope.sendMsg(buf,4,std::bind(&TelescopeIOptron::CommandMove::vertRquFinished,this));
     }
   }
