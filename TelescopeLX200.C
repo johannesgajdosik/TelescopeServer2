@@ -1663,7 +1663,7 @@ private:
   short int horz = 0;
   short int vert = 0;
   short int speed = 0;
-  char buf[5];
+  char buf[9];
 };
 
 void TelescopeLX200::move(short int horz,short int vert,
@@ -1684,61 +1684,31 @@ void TelescopeLX200::move(short int horz,short int vert,
 
 
 
-
+#define MININT32 (-0x7FFFFFFF-1)
 
 class TelescopeLX200::CommandGuide  : public TelescopeLX200::Command {
 public:
-  CommandGuide(TelescopeLX200 &telescope) : Command(telescope),d_ra(0),d_dec(0) {}
+  CommandGuide(TelescopeLX200 &telescope)
+    : Command(telescope),d_ra(MININT32),d_dec(MININT32) {}
   void accumulate(int d_ra_micros,int d_dec_micros) {
-    if (d_ra_micros != (-0x7FFFFFFF-1)) d_ra += d_ra_micros;
-    if (d_dec_micros != (-0x7FFFFFFF-1)) d_dec = d_dec_micros;
+    if (d_ra_micros != MININT32) {
+      if (d_ra == MININT32) d_ra = d_ra_micros;
+      else d_ra += d_ra_micros;
+    }
+    if (d_dec_micros != MININT32) {
+      if (d_dec == MININT32) d_dec = d_dec_micros;
+      else d_dec += d_dec_micros;
+    }
   }
   void execAsync(void) override {
-      // convert micros->millis
-    d_ra /= 1000;
-    d_dec /= 1000;
-    sendRaRqu();
+    telescope.commandFinished();
   }
   void print(std::ostream &o) const override {
     o << "CommandGuide(" << d_ra << ',' << d_dec << ')';
   }
 private:
-  void sendRaRqu(void) {
-    if (d_ra == 0) {
-      sendDecRqu();
-      return;
-    }
-    buf[0] = ':';
-    buf[1] = 'M';
-    buf[2] = (d_ra < 0) ? 'w' : 'e';
-    FillDecimal(buf+3,5,std::abs(d_ra));
-    buf[8] = '#';
-    telescope.sendMsg(buf,9,std::bind(&TelescopeLX200::CommandGuide::raRquFinished,this));
-  }
-  void raRquFinished(void) {
-    d_ra = 0;
-    sendDecRqu();
-  }
-  void sendDecRqu(void) {
-    if (d_dec == 0) {
-      telescope.commandFinished();
-      return;
-    }
-    buf[0] = ':';
-    buf[1] = 'M';
-    buf[2] = (d_dec < 0) ? 'n' : 's';
-    FillDecimal(buf+3,5,std::abs(d_dec));
-    buf[8] = '#';
-    telescope.sendMsg(buf,9,std::bind(&TelescopeLX200::CommandGuide::decRquFinished,this));
-  }
-  void decRquFinished(void) {
-    d_dec = 0;
-    telescope.commandFinished();
-  }
-private:
   int d_ra;
   int d_dec;
-  char buf[9];
 };
 
 void TelescopeLX200::guide(int d_ra_micros,int d_dec_micros) {

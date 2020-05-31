@@ -1444,26 +1444,35 @@ void TelescopeIOptron::move(short int horz,short int vert,
 
 
 
+#define MININT32 (-0x7FFFFFFF-1)
+
 class TelescopeIOptron::CommandGuide  : public TelescopeIOptron::Command {
 public:
-  CommandGuide(TelescopeIOptron &telescope) : Command(telescope),d_ra(0),d_dec(0) {}
+  CommandGuide(TelescopeIOptron &telescope)
+    : Command(telescope),d_ra(MININT32),d_dec(MININT32) {}
   void accumulate(int d_ra_micros,int d_dec_micros) {
-    if (d_ra_micros != (-0x7FFFFFFF-1)) d_ra += d_ra_micros;
-    if (d_dec_micros != (-0x7FFFFFFF-1)) d_dec = d_dec_micros;
+    if (d_ra_micros != MININT32) {
+      if (d_ra == MININT32) d_ra = d_ra_micros;
+      else d_ra += d_ra_micros;
+    }
+    if (d_dec_micros != MININT32) {
+      if (d_dec == MININT32) d_dec = d_dec_micros;
+      else d_dec += d_dec_micros;
+    }
   }
   void execAsync(void) override {
       // convert micros->millis
-    d_ra /= 1000;
-    d_dec /= 1000;
-    sendRaRqu();
+    if (d_ra  != MININT32) d_ra  /= 1000;
+    if (d_dec != MININT32) d_dec /= 1000;
+    sendRaMsg();
   }
   void print(std::ostream &o) const override {
     o << "CommandGuide(" << d_ra << ',' << d_dec << ')';
   }
 private:
-  void sendRaRqu(void) {
-    if (d_ra == 0) {
-      sendDecRqu();
+  void sendRaMsg(void) {
+    if (d_ra == MININT32) {
+      sendDecMsg();
       return;
     }
     buf[0] = ':';
@@ -1471,14 +1480,12 @@ private:
     buf[2] = (d_ra < 0) ? 'w' : 'e';
     FillDecimal(buf+3,5,std::abs(d_ra));
     buf[8] = '#';
-    telescope.sendMsg(buf,9,std::bind(&TelescopeIOptron::CommandGuide::raRquFinished,this));
+    buf[9] = '\0';
+    telescope.sendMsg(buf,9,std::bind(&TelescopeIOptron::CommandGuide::sendDecMsg,this));
+    d_ra = MININT32;
   }
-  void raRquFinished(void) {
-    d_ra = 0;
-    sendDecRqu();
-  }
-  void sendDecRqu(void) {
-    if (d_dec == 0) {
+  void sendDecMsg(void) {
+    if (d_dec == MININT32) {
       telescope.commandFinished();
       return;
     }
@@ -1487,16 +1494,14 @@ private:
     buf[2] = (d_dec < 0) ? 'n' : 's';
     FillDecimal(buf+3,5,std::abs(d_dec));
     buf[8] = '#';
-    telescope.sendMsg(buf,9,std::bind(&TelescopeIOptron::CommandGuide::decRquFinished,this));
-  }
-  void decRquFinished(void) {
-    d_dec = 0;
-    telescope.commandFinished();
+    buf[9] = '\0';
+    telescope.sendMsg(buf,9,std::bind(&TelescopeIOptron::commandFinished,&telescope));
+    d_dec = MININT32;
   }
 private:
   int d_ra;
   int d_dec;
-  char buf[9];
+  char buf[10];
 };
 
 void TelescopeIOptron::guide(int d_ra_micros,int d_dec_micros) {
