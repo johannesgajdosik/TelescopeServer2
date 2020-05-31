@@ -327,20 +327,26 @@ void TelescopeLX200::sendRqu(const char *data,int size,
 
 void TelescopeLX200::sendMsg(const char *data,int size,
                              std::function<void(void)> &&finished) {
+//  std::cout << PrintTime() << " "
+//               "TelescopeLX200::sendMsg(" << std::string(data,size) << ',' << &finished << ')' << std::endl;
   serial.async_write_some(
     boost::asio::buffer(data,size),
     [this,data,size,f = std::move(finished)] (
         const boost::system::error_code &error,std::size_t written) mutable {
+//      std::cout << PrintTime() << " "
+//                   "TelescopeLX200::sendMsg(" << std::string(data,size) << ")"
+//                   "::l(" << error.message() << ',' << written << "): "
+//                   "start" << std::endl;
       if (error) {
         if (error == boost::system::errc::io_error) {
           std::cout << PrintTime() << " "
-                       "TelescopeLX200::sendMsg::l: "
+                       "TelescopeLX200::sendMsg(" << std::string(data,size) << ")::l: "
                        "IO ERROR" << std::endl;
           initialize();
           return;
         }
         std::cout << PrintTime() << " "
-                     "TelescopeLX200::sendMsg::l: write failed: "
+                     "TelescopeLX200::sendMsg(" << std::string(data,size) << ")::l: write failed: "
                   << error.message() << std:: endl;
         init();
         return;
@@ -348,9 +354,13 @@ void TelescopeLX200::sendMsg(const char *data,int size,
       data += written;
       size -= written;
       if (size > 0) {
+        std::cout << PrintTime() << " "
+                     "TelescopeLX200::sendMsg::l: calling again" << std::endl;
         sendMsg(data,size,std::move(f));
         return;
       }
+//      std::cout << PrintTime() << " "
+//                   "TelescopeLX200::sendMsg::l: calling " << &f << " finished()" << std::endl;
       f();
     });
 }
@@ -453,14 +463,14 @@ public:
     : Command(telescope),drain_deadline(telescope.serial.get_executor()),
       drain_micros(drain_micros) {}
   void execAsync(void) override {
-    sendStopRqu();
+    sendStopMsg();
   }
   void print(std::ostream &o) const override {
     o << "CommandInit(" << drain_micros << ')';
   }
 private:
   unsigned int getTimeoutMicros(void) const override {return 10*1000000 + drain_micros;}
-  void sendStopRqu(void) {
+  void sendStopMsg(void) {
     if (telescope.telescope_online) {
       telescope.telescope_online = false;
       telescope.opened_closed(false);
@@ -473,7 +483,7 @@ private:
     drain_deadline.async_wait(
       [t = &telescope](const boost::system::error_code &error) {
         std::cout << PrintTime() << " "
-                     "TelescopeLX200::CommandInit::sendStopRqu::l: "
+                     "TelescopeLX200::CommandInit::sendStopMsg::l: "
                      "draining deadline reached, " << error.message()
                   << std:: endl;
           // cancel serial read/write requests regardless of error:
@@ -481,38 +491,38 @@ private:
         t->serial.cancel(ec);
         if (ec) {
           std::cout << PrintTime() << " "
-                       "TelescopeLX200::CommandInit::sendStopRqu::l: "
+                       "TelescopeLX200::CommandInit::sendStopMsg::l: "
                        "serial.cancel failed: " << ec.message()
                     << std:: endl;
         }
       });
     std::cout << PrintTime() << " "
-                 "TelescopeLX200::CommandInit::sendStopRqu: "
-                 "sending :Q#, draining for " << drain_micros << "us" << std::endl;
-    telescope.sendMsg(":Q#",3,std::bind(&TelescopeLX200::CommandInit::recvStopRsp,this));
+                 "TelescopeLX200::CommandInit::sendStopMsg: "
+                 "sending :Qn#:Qs#:Qe#:Qw#, draining for " << drain_micros << "us" << std::endl;
+    telescope.sendMsg(":Qn#:Qs#:Qe#:Qw#",16,std::bind(&TelescopeLX200::CommandInit::drain,this));
   }
-  void recvStopRsp(void) {
+  void drain(void) {
     telescope.serial.async_read_some(
       boost::asio::buffer(telescope.recv_buf,sizeof(telescope.recv_buf)-1),
       [this](const boost::system::error_code &error,std::size_t size) {
         if (error) {
           if (error == boost::system::errc::io_error) {
             std::cout << PrintTime() << " "
-                         "TelescopeLX200::CommandInit::recvStopRsp::l: "
+                         "TelescopeLX200::CommandInit::drain::l: "
                          "IO ERROR" << std::endl;
             telescope.initialize();
             return;
           }
           if (error == boost::asio::error::eof) {
             std::cout << PrintTime() << " "
-                         "TelescopeLX200::CommandInit::recvStopRsp::l: "
+                         "TelescopeLX200::CommandInit::drain::l: "
                          "EOF" << std::endl;
             telescope.initialize();
             return;
           }
           if (error == boost::asio::error::operation_aborted) {
             std::cout << PrintTime() << " "
-                         "TelescopeLX200::CommandInit::recvStopRsp::l: "
+                         "TelescopeLX200::CommandInit::drain::l: "
                          "draining finished"
                       << std:: endl;
             telescope.recv_used = 0;
@@ -520,7 +530,7 @@ private:
             return;
           }
           std::cout << PrintTime() << " "
-                       "TelescopeLX200::CommandInit::recvStopRsp::l: "
+                       "TelescopeLX200::CommandInit::drain::l: "
                        "unexpected error: " << error.message() << std::endl;
           telescope.initialize();
           return;
@@ -528,10 +538,10 @@ private:
         }
         telescope.recv_buf[size] = '\0';
         std::cout << PrintTime() << " "
-                     "TelescopeLX200::CommandInit::recvStopRsp::l: "
+                     "TelescopeLX200::CommandInit::drain::l: "
                      "received \"" << telescope.recv_buf << "\", draining..."
                   << std::endl;
-        recvStopRsp();
+        drain();
       });
   }
   void sendGetCalendarFormatRqu(void) {
@@ -1008,7 +1018,6 @@ void TelescopeLX200::positionReceived(const LX200RaDec &ra_dec) {
                                          * earth_orientation;
     double az,alt;
     RectToPolar(equat_orientation*v0,az,alt);
-#define PRINT_PERIODIC_POSITION
 
 #ifdef PRINT_PERIODIC_POSITION
       std::cout << PrintTime() << " "
@@ -1056,9 +1065,11 @@ public:
   void print(std::ostream &o) const override {o << "CommandGetPos";}
 private:
   void sendGetRaRqu(void) {
+#ifdef LOG_GET_POS
     std::cout << PrintTime() << " "
                  "TelescopeLX200::CommandGetPos::sendGetRaRqu: "
                  "sending :GR#" << std::endl;
+#endif
     telescope.sendRqu(":GR#",4,std::bind(&TelescopeLX200::CommandGetPos::recvGetRaRsp,this));
   }
   int recvGetRaRsp(void) {
@@ -1146,10 +1157,12 @@ private:
       seconds += 6;
     }
     ra_dec.ra = (hours*60+minutes)*60+seconds;
+#ifdef LOG_GET_POS
     std::cout << PrintTime() << " "
                  "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
                 << std::string(telescope.recv_buf,telescope.recv_used)
                 << "\": ok: " << PrintRaSeconds(ra_dec.getRa()) << std::endl;
+#endif
     if (long_format) {
       sendGetDecRqu();
       return 9;
@@ -1158,15 +1171,19 @@ private:
     return 8;
   }    
   void sendPrecisionToggleRqu(std::function<void(void)> &&finished) {
+#ifdef LOG_GET_POS
     std::cout << PrintTime() << " "
                  "TelescopeLX200::CommandGetPos::sendPrecisionToggleRqu: "
                  "sending :U#" << std::endl;
+#endif
     telescope.sendMsg(":U#",3,std::move(finished));
   }
   void sendGetDecRqu(void) {
+#ifdef LOG_GET_POS
     std::cout << PrintTime() << " "
                  "TelescopeLX200::CommandGetPos::sendGetDecRqu: "
                  "sending :GD#" << std::endl;
+#endif
     telescope.sendRqu(":GD#",4,std::bind(&TelescopeLX200::CommandGetPos::recvGetDecRsp,this));
   }
   int recvGetDecRsp(void) {
@@ -1257,10 +1274,12 @@ private:
                 << "\": bad degrees: too big, ignoring response" << std::endl;
       return -1;
     }
+#ifdef LOG_GET_POS
     std::cout << PrintTime() << " "
                  "TelescopeLX200::CommandGetPos::recvGetDecRsp: \""
                 << std::string(telescope.recv_buf,telescope.recv_used)
                 << "\": ok: " << PrintDecSeconds(ra_dec.getDecSign(),ra_dec.getAbsDec()) << std::endl;
+#endif
     telescope.positionReceived(ra_dec);
     telescope.get_pos_deadline.expires_from_now(boost::posix_time::microseconds(250000));
     telescope.get_pos_deadline.async_wait(
@@ -1436,13 +1455,11 @@ void TelescopeLX200::gotoPosition(const unsigned int ra_int_j2000,const int dec_
   RectToPolar(v,ra,dec);
   if (dec < -0.5*M_PI || dec > 0.5*M_PI) abort();
   LX200RaDec ra_dec( (unsigned int)floor(0.5+ ra*(2147483648.0/M_PI)),
-                                (int)floor(0.5+dec*(2147483648.0/M_PI)) );
+                              (int)floor(0.5+dec*(2147483648.0/M_PI)) );
   gotoPosition(ra_dec);
 }
 
-
 //------------------------------------------------------------------------
-
 
 
 
@@ -1455,41 +1472,77 @@ public:
     if (horz != -0x8000) CommandMove::horz = horz;
     if (vert != -0x8000) CommandMove::vert = vert;
     CommandMove::micros = micros;
-    std::cout << "CommandMove::accumulate: "
+    std::cout << PrintTime() << " "
+                 "CommandMove::accumulate: "
               << CommandMove::horz << '/' << CommandMove::vert << ": " << CommandMove::micros
               << std::endl;
   }
-  static short int Rescale9(short int x) {
-      // range -9..+9
-//      return (x < 0) ? -(-x*9+0x4000) >> 15) : (x*9+0x4000) >> 15);
-      // 2*32767/19=3449.16
-    return (x < 0) ? -((-x + 1725) / 3450) : ((x + 1725) / 3450);
+  static short int Rescale4(short int x) {
+//CommandMove::accumulate: 0/-3640: 1000000
+//CommandMove::accumulate: 7281/0: 1000000
+//CommandMove::accumulate: 0/14563: 1000000
+//CommandMove::accumulate: -29126/0: 1000000
+    if (x > 2048) {
+      if (x > 8192) {
+        if (x > 16384) {
+          return 4;
+        } else {
+          return 3;
+        }
+      } else {
+        if (x > 4096) {
+          return 2;
+        } else {
+          return 1;
+        }
+      }
+    } else {
+      if (x < -8192) {
+        if (x < -16384) {
+          return -4;
+        } else {
+          return -3;
+        }
+      } else {
+        if (x < -4096) {
+          return -2;
+        } else {
+          if (x < -2048) {
+            return -1;
+          } else {
+            return 0;
+          }
+        }
+      }
+    }
   }
   void execAsync(void) override {
     if (horz == -0x8000) {
       horz = telescope.curr_horz;
     } else {
-        // range -9..+9
-      horz = Rescale9(horz);
+      horz = Rescale4(horz);
     }
     if (vert == -0x8000) {
       vert = telescope.curr_vert;
     } else {
-      vert = Rescale9(vert);
+      vert = Rescale4(vert);
     }
     speed = std::max(std::abs(horz),std::abs(vert));
     if (std::abs(horz) < speed) horz = 0;
     if (std::abs(vert) < speed) vert = 0;
-    std::cout << "CommandMove::execAsync: "
+    std::cout << PrintTime() << " "
+                 "CommandMove::execAsync: "
               << horz << '/' << vert
               << std::endl;
     if (speed != 0) {
       telescope.move_deadline.expires_from_now(boost::posix_time::microseconds(micros));
       telescope.move_deadline.async_wait(
         [t = &telescope](const boost::system::error_code &e) {
-          std::cout << "CommandMove::move_deadline_l: " << e.message() << std::endl;
+//          std::cout << PrintTime() << " "
+//                       "CommandMove::move_deadline_l: " << e.message() << std::endl;
           if (e) return; // timer was cancelled
-          std::cout << "CommandMove::move_deadline_l: stopping movement" << std::endl;
+          std::cout << PrintTime() << " "
+                       "CommandMove::move_deadline_l: stopping movement" << std::endl;
           t->move(0,0,0);
         });
     }
@@ -1500,130 +1553,110 @@ public:
       telescope.commandFinished();
       return;
     }
-    sendSpeedRqu();
+    sendSpeedMsg();
   }
   void print(std::ostream &o) const override {
     o << "CommandMove(" << horz << ',' << vert << ';' << micros << ')';
   }
 private:
-  void sendSpeedRqu(void) {
+  void sendSpeedMsg(void) {
     if (speed == 0) {
       std::cout << PrintTime() << " "
-                   "TelescopeLX200::CommandMove::sendSpeedRqu: stop" << std::endl;
+                   "TelescopeLX200::CommandMove(" << horz << '/' << vert << ")::sendSpeedMsg: stop" << std::endl;
       telescope.move_deadline.cancel();
-      sendStopRqu();
+      sendStopMsg();
       return;
     }
     if (telescope.curr_speed == speed) {
-      sendHorzRqu();
+      sendHorzMsg();
       return;
     }
     if (telescope.curr_speed == 0) {
         // start moving, TODO: query movement speed for later resetting
     }
     buf[0] = ':';
-    buf[1] = 'S';
-    buf[2] = 'R';
-    buf[3] = '0'+(char)speed;
-    buf[4] = '#';
-    telescope.sendRqu(buf,5,std::bind(&TelescopeLX200::CommandMove::recvSpeedRsp,this));
-  }
-  int recvSpeedRsp(void) {
-    if (telescope.recv_buf[0] != '1') {
-      std::cout << PrintTime() << " "
-                   "TelescopeLX200::CommandMove(" << horz << ',' << vert << ")::recvSpeedRsp("
-                << std::string(telescope.recv_buf,telescope.recv_used) << "): "
-                   "Bad Response" << std::endl;
-      return -1;
-    }
+    buf[1] = 'R';
+    buf[2] = (speed < 3)
+           ? ((speed < 2) ? 'G' : 'C')
+           : ((speed < 4) ? 'M' : 'S');
+    buf[3] = '#';
+    buf[4] = '\0';
     telescope.curr_speed = speed;
-    sendHorzRqu();
-    return 1;
+    std::cout << PrintTime() << " "
+                 "TelescopeLX200::CommandMove(" << horz << '/' << vert << ")::sendSpeedMsg: "
+                 "sending " << buf << std::endl;
+    telescope.sendMsg(buf,4,std::bind(&TelescopeLX200::CommandMove::sendHorzMsg,this));
   }
-  void sendStopRqu(void) {
-    telescope.sendRqu(":q#",3,std::bind(&TelescopeLX200::CommandMove::recvStopRsp,this));
-  }
-  int recvStopRsp(void) {
-    if (telescope.recv_buf[0] != '1') {
-      std::cout << PrintTime() << " "
-                   "TelescopeLX200::CommandMove(" << horz << ',' << vert << ")::recvStopRsp("
-                << std::string(telescope.recv_buf,telescope.recv_used) << "): "
-                   "Bad Response" << std::endl;
-      return -1;
+  void sendStopMsg(void) {
+    char *p = buf;
+    if (telescope.curr_horz != 0) {
+      *p++ = ':';
+      *p++ = 'Q';
+      *p++ = (telescope.curr_horz < 0) ? 'w' : 'e';
+      *p++ = '#';
+      telescope.curr_horz = 0;
+    }
+    if (telescope.curr_vert != 0) {
+      *p++ = ':';
+      *p++ = 'Q';
+      *p++ = (telescope.curr_vert < 0) ? 'n' : 's';
+      *p++ = '#';
+      telescope.curr_vert = 0;
     }
     telescope.curr_speed = 0;
-    telescope.curr_horz = 0;
-    telescope.curr_vert = 0;
-    telescope.commandFinished();
-    return 1;
+    if (p == buf) {
+      telescope.commandFinished();
+      return;
+    }
+    *p = '\0';
+    std::cout << PrintTime() << " "
+                 "TelescopeLX200::CommandMove(" << horz << '/' << vert << ")::sendStopMsg: "
+                 "sending " << buf << std::endl;
+    telescope.sendMsg(buf,p-buf,std::bind(&TelescopeLX200::commandFinished,&telescope));
   }
-  void sendHorzRqu(void) {
+  void sendHorzMsg(void) {
     if (telescope.curr_horz == horz) {
-      sendVertRqu();
+      sendVertMsg();
       return;
     }
     buf[0] = ':';
-    buf[3] = '#';
     if (horz == 0) {
-      buf[1] = 'q';
-      buf[2] = 'R';
-      telescope.sendRqu(buf,4,std::bind(&TelescopeLX200::CommandMove::recvHorzStopRsp,this));
+      buf[1] = 'Q';
+      buf[2] = (telescope.curr_horz < 0) ? 'w' : 'e';
     } else {
-      buf[1] = 'm';
+      buf[1] = 'M';
         // horz > 0: right, east
       buf[2] = (horz < 0) ? 'w' : 'e';
-      telescope.sendMsg(buf,4,std::bind(&TelescopeLX200::CommandMove::horzRquFinished,this));
     }
-  }
-  void horzRquFinished(void) {
+    buf[3] = '#';
+    buf[4] = '\0';
     telescope.curr_horz = horz;
-    sendVertRqu();
+    std::cout << PrintTime() << " "
+                 "TelescopeLX200::CommandMove(" << horz << '/' << vert << ")::sendStopMsg: "
+                 "sending " << buf << std::endl;
+    telescope.sendMsg(buf,4,std::bind(&TelescopeLX200::CommandMove::sendVertMsg,this));
   }
-  int recvHorzStopRsp(void) {
-    if (telescope.recv_buf[0] != '1') {
-      std::cout << PrintTime() << " "
-                   "TelescopeLX200::CommandMove(" << horz << ',' << vert << ")::recvHorzStopRsp("
-                << std::string(telescope.recv_buf,telescope.recv_used) << "): "
-                   "Bad Response" << std::endl;
-      return -1;
-    }
-    horzRquFinished();
-    return 1;
-  }
-  void sendVertRqu(void) {
+  void sendVertMsg(void) {
     if (telescope.curr_vert == vert) {
       telescope.commandFinished();
       return;
     }
     buf[0] = ':';
-    buf[3] = '#';
     if (vert == 0) {
-      buf[1] = 'q';
-      buf[2] = 'D';
-      telescope.sendRqu(buf,4,std::bind(&TelescopeLX200::CommandMove::recvVertStopRsp,this));
+      buf[1] = 'Q';
+      buf[2] = (telescope.curr_vert < 0) ? 'n' : 's';
     } else {
-      buf[1] = 'm';
+      buf[1] = 'M';
         // vert > 0: down, south
-      buf[2] = (vert < 0) ? 's' : 'n'; // :mn# actually moves south
-      buf[5] = '\0';
-std::cout << "vertRqu: " << buf << std::endl;
-      telescope.sendMsg(buf,4,std::bind(&TelescopeLX200::CommandMove::vertRquFinished,this));
+      buf[2] = (vert < 0) ? 'n' : 's';
     }
-  }
-  void vertRquFinished(void) {
+    buf[3] = '#';
+    buf[4] = '\0';
     telescope.curr_vert = vert;
-    telescope.commandFinished();
-  }
-  int recvVertStopRsp(void) {
-    if (telescope.recv_buf[0] != '1') {
-      std::cout << PrintTime() << " "
-                   "TelescopeLX200::CommandMove(" << vert << ',' << vert << ")::recvVertStopRsp("
-                << std::string(telescope.recv_buf,telescope.recv_used) << "): "
-                   "Bad Response" << std::endl;
-      return -1;
-    }
-    vertRquFinished();
-    return 1;
+    std::cout << PrintTime() << " "
+                 "TelescopeLX200::CommandMove(" << horz << '/' << vert << ")::sendVertMsg: "
+                 "sending " << buf << std::endl;
+    telescope.sendMsg(buf,4,std::bind(&TelescopeLX200::commandFinished,&telescope));
   }
 private:
   unsigned int micros = 0;
@@ -1644,7 +1677,11 @@ void TelescopeLX200::move(short int horz,short int vert,
 }
 
 
+
 //------------------------------------------------------------------------
+
+
+
 
 
 
@@ -1704,7 +1741,6 @@ private:
   char buf[9];
 };
 
-
 void TelescopeLX200::guide(int d_ra_micros,int d_dec_micros) {
   if (!next_command_guide) {
     next_command_guide = std::make_unique<CommandGuide>(*this);
@@ -1715,7 +1751,6 @@ void TelescopeLX200::guide(int d_ra_micros,int d_dec_micros) {
 
 
 //------------------------------------------------------------------------
-
 
 
 
