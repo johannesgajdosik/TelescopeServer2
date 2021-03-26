@@ -102,7 +102,7 @@ public:
   public:
     virtual ~Command(void) {}
     virtual void execAsync(void) = 0;
-    virtual unsigned int getTimeoutMicros(void) const {return 500000;}
+    virtual unsigned int getTimeoutMicros(void) const {return 1000000;}
     virtual void print(std::ostream &o) const = 0;
   protected:
     Command(TelescopeIOptron &telescope) : telescope(telescope) {}
@@ -579,7 +579,7 @@ public:
     o << "CommandInit(" << drain_micros << ')';
   }
 private:
-  unsigned int getTimeoutMicros(void) const override {return 500000 + drain_micros;}
+  unsigned int getTimeoutMicros(void) const override {return 1000000 + drain_micros;}
   void sendStopRqu(void) {
     if (telescope.telescope_online) {
       telescope.telescope_online = false;
@@ -1022,8 +1022,7 @@ void TelescopeIOptron::positionReceived(const IOptronRaDec &ra_dec) {
       end_of_last_goto = now + expected_duration;
 
 #ifdef PRINT_PERIODIC_POSITION
-        std::cout << PrintRaInt(hour_angle_int)
-                  << " FORBIDDEN, "
+        std::cout << " FORBIDDEN, "
 //                     "expecting " << expected_duration << "us for "
                      "GOTO("
                   << "Ra:" << PrintRaInt(goto_ra_int)
@@ -1100,7 +1099,7 @@ private:
 //                << std::string(telescope.recv_buf,telescope.recv_used)
 //                << "\" ok: " << ra_dec << std::endl;
     telescope.positionReceived(ra_dec);
-    telescope.get_pos_deadline.expires_from_now(boost::posix_time::microseconds(100000));
+    telescope.get_pos_deadline.expires_from_now(boost::posix_time::microseconds(500000));
     telescope.get_pos_deadline.async_wait(
       [t = &telescope](const boost::system::error_code &e) {
         if (e) return; // timer was cancelled
@@ -1130,10 +1129,31 @@ public:
     CommandGoto::ra_dec = ra_dec;
   }
   void execAsync(void) override {
+    ///sendStartTrackingRqu();
     sendDecRqu();
   }
+  unsigned int getTimeoutMicros(void) const override {return 2000000;}
   void print(std::ostream &o) const override {o << "CommandGoto" << ra_dec;}
 private:
+  void sendStartTrackingRqu(void) {
+    buf[0] = ':';
+    buf[1] = 'S';
+    buf[2] = 'T';
+    buf[3] = '1';
+    buf[4] = '#';
+    telescope.sendRqu(buf,5,std::bind(&TelescopeIOptron::CommandGoto::recvStartTrackingRsp,this));
+  }
+  int recvStartTrackingRsp(void) {
+    if (telescope.recv_buf[0] != '1') {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGoto" << ra_dec << "::recvStartTrackingRsp \""
+                << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
+                   "ST1: Bad Response" << std::endl;
+      return -1;
+    }
+    sendDecRqu();
+    return 1;
+  }
   void sendDecRqu(void) {
     buf[0] = ':';
     buf[1] = 'S';
