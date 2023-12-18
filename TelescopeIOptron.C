@@ -135,6 +135,13 @@ private:
   class CommandGetLoc;
   void getLoc(void);
 
+    // time
+  void timeReceived(unsigned long long int time,int offset,bool dst);
+  class CommandGetTime;
+  void getTime(void);
+  class CommandSetTime;
+  void setTime(void);
+
     // telescope pointing position in the sky
   void positionReceived(const IOptronRaDec &ra_dec);
   class CommandGetPos;
@@ -168,10 +175,14 @@ private:
   std::unique_ptr<Command> curr_command;
   std::unique_ptr<CommandInit> next_command_init;
   std::unique_ptr<CommandGetLoc> next_command_get_loc;
+  std::unique_ptr<CommandGetTime> next_command_get_time;
+  std::unique_ptr<CommandSetTime> next_command_set_time;
   std::unique_ptr<CommandGetPos> next_command_get_pos;
   std::unique_ptr<CommandGoto> next_command_goto;
   std::unique_ptr<CommandMove> next_command_move;
   std::unique_ptr<CommandGuide> next_command_guide;
+
+  int timezone_offset = 0;
 
   Matrix<double,3,3> precession_matrix;
   Matrix<double,3,3> geographic_pos_orientation;
@@ -401,13 +412,11 @@ void TelescopeIOptron::recvRsp(std::function<int(void)> &&rsp_data_received) {
 }
 
 void TelescopeIOptron::sendRqu(const char *data,int size,
-                               std::function<int(void)>  &&rsp_data_received) {
+                               std::function<int(void)> &&rsp_data_received) {
   sendMsg(data,size,
           [this,f = std::move(rsp_data_received)]() mutable {
             recv_used = 0;
-            std::function<int(void)> f2;
-            f2.swap(f);
-            recvRsp(std::move(f2));
+            recvRsp(std::move(f));
           });
 }
 
@@ -576,10 +585,10 @@ public:
     sendStopRqu();
   }
   void print(std::ostream &o) const override {
-    o << "CommandInit(" << drain_micros << ')';
+    o << "CommandInit(" << CommandInit::getTimeoutMicros() << ')';
   }
 private:
-  unsigned int getTimeoutMicros(void) const override {return 1000000 + drain_micros;}
+  unsigned int getTimeoutMicros(void) const override {return 2000000 + drain_micros;}
   void sendStopRqu(void) {
     if (telescope.telescope_online) {
       telescope.telescope_online = false;
@@ -717,7 +726,7 @@ private:
               << ", Dec motor board FW: "
               << std::string(telescope.recv_buf+6,6)
               << std::endl;
-    telescope.getLoc();
+    telescope.getTime();
     if (!telescope.telescope_online) {
       telescope.telescope_online = true;
       telescope.opened_closed(true);
@@ -753,6 +762,17 @@ static bool ParseDecimal(const char *data,unsigned int size,unsigned int &x) {
     const char c = *data++;
     if (c < '0' || '9' < c) return false;
     x = 10u*x + (unsigned int)(c-'0');
+    size--;
+  }
+  return true;
+}
+
+static bool ParseDecimal(const char *data,unsigned int size,unsigned long long int &x) {
+  x = 0;
+  while (size > 0) {
+    const char c = *data++;
+    if (c < '0' || '9' < c) return false;
+    x = 10ULL*x + (unsigned long long int)(c-'0');
     size--;
   }
   return true;
@@ -841,7 +861,8 @@ private:
       std::cout << PrintTime() << " "
                    "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
                 << std::string(telescope.recv_buf,telescope.recv_used)
-                << "\": bad longitude: abs(longitude)>" << (180*3600) << ", ignoring response"  << std::endl;
+                << "\": bad longitude: abs(longitude)="
+                << abs_longitude << ">" << (180*3600) << ", ignoring response"  << std::endl;
       return -1;
     }
     unsigned int latitude_p90;
@@ -856,25 +877,38 @@ private:
       std::cout << PrintTime() << " "
                    "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
                 << std::string(telescope.recv_buf,telescope.recv_used)
-                << "\": bad Latitude: Latitude+90Deg>=" << (180*3600) << ", ignoring response" << std::endl;
+                << "\": bad Latitude: Latitude+90Deg="
+                << latitude_p90 << ">=" << (180*3600) << ", ignoring response" << std::endl;
       return -1;
     }
 
     switch (telescope.recv_buf[13]) {
       case '0':
           // no GPS module or error
+        std::cout << PrintTime() << " "
+                     "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": GPS module malfunction" << std::endl;
         break;
       case '1':
           // GPS module ok but no GPS data (yet)
+        std::cout << PrintTime() << " "
+                     "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": GPS module has not yet received valid GPS data" << std::endl;
         break;
       case '2':
           // GPS data ok
+        std::cout << PrintTime() << " "
+                     "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": GPS module has received valid GPS data" << std::endl;
         break;
       default:
         std::cout << PrintTime() << " "
                      "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
                   << std::string(telescope.recv_buf,telescope.recv_used)
-                  << "\": bad GPS status '"
+                  << "\": bad GPS status: '"
                   << telescope.recv_buf[13] << '\'' << std::endl;
         return -1;
     }
@@ -907,7 +941,7 @@ private:
         std::cout << PrintTime() << " "
                      "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
                   << std::string(telescope.recv_buf,telescope.recv_used)
-                  << "\": bad system status '"
+                  << "\": bad system status: '"
                   << telescope.recv_buf[14] << '\'' << std::endl;
         return -1;
     }
@@ -931,12 +965,88 @@ private:
         std::cout << PrintTime() << " "
                      "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
                   << std::string(telescope.recv_buf,telescope.recv_used)
-                  << "\": bad tracking rate '"
+                  << "\": bad tracking rate: '"
                   << telescope.recv_buf[15] << '\'' << std::endl;
         return -1;
     }
+    if (telescope.recv_buf[16] <= '0' || '9' < telescope.recv_buf[16]) {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad button speed: '"
+                << telescope.recv_buf[16] << '\'' << std::endl;
+      return -1;
+    }
+    std::cout << PrintTime() << " "
+                 "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+              << std::string(telescope.recv_buf,telescope.recv_used)
+              << "\": button speed: " << telescope.recv_buf[16] << std::endl;
+    switch (telescope.recv_buf[17]) {
+      case '1':
+          // from RS232 or Ethernet
+        std::cout << PrintTime() << " "
+                     "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": time from RS232 or Ethernet" << std::endl;
+        break;
+      case '2':
+          // time from hand controller
+        std::cout << PrintTime() << " "
+                     "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": time from hand controller" << std::endl;
+        if (telescope.recv_buf[13] == '2') {
+          std::cout << PrintTime() << " "
+                       "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+                    << std::string(telescope.recv_buf,telescope.recv_used)
+                    << "\": The mount claims to have received valid GPS data "
+                       "but still uses time from hand controller? Seems unlikely to me." << std::endl;
+        }
+        break;
+      case '3':
+          // time from GPS
+        std::cout << PrintTime() << " "
+                     "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": time from GPS" << std::endl;
+        break;
+      default:
+        std::cout << PrintTime() << " "
+                     "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": bad time source: '"
+                  << telescope.recv_buf[17] << '\'' << std::endl;
+        return -1;
+    }
+    switch (telescope.recv_buf[18]) {
+      case '0':
+        std::cout << PrintTime() << " "
+                     "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": Southern Hemisphere" << std::endl;
+        break;
+      case '1':
+        std::cout << PrintTime() << " "
+                     "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": Northern Hemisphere" << std::endl;
+        break;
+      default:
+        std::cout << PrintTime() << " "
+                     "TelescopeIOptron::CommandGetLoc::recvGetLocRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": bad hemisphere: '"
+                  << telescope.recv_buf[17] << '\'' << std::endl;
+        return -1;
+    }
+
     telescope.locationReceived(longitude_sign ? (360*3600u-abs_longitude) : abs_longitude, latitude_p90);
-    telescope.getPos();
+    if (telescope.recv_buf[13] == '2' || telescope.recv_buf[17] == '1') {
+        // GPS data received or time from RS232/Ethernet
+      telescope.getPos();
+    } else {
+      telescope.setTime();
+    }
     telescope.commandFinished();
     return 20;
   }
@@ -948,6 +1058,391 @@ void TelescopeIOptron::getLoc(void) {
   }
   doSomething();
 }
+
+
+//----------Time-------------------------------------------------------
+
+
+void TelescopeIOptron::timeReceived(unsigned long long int time,int offset,bool dst) {
+  TelescopeIOptron::timezone_offset = offset;
+  std::cout << PrintTime() << " "
+               "TelescopeIOptron::timeReceived: "
+            << PrintTime(time)
+            << ", timezone offset: " << offset
+            << ", dst: " << (dst?'Y':'N') << std::endl;
+}
+
+static
+void DecomposeYear(int y,int &A,unsigned int &B,unsigned int &C,unsigned int &D) {
+  if (y < 0) {
+    A = (y-3) / 4;   // A < 0
+    D = y - 4 * A;   // D >= 0
+    y = (A-24) / 25; // y < 0
+    C = A - 25 * y;  // C >= 0
+    A = (y-3) / 4;   // A < 0
+    B = y - 4 * A;   // B >= 0
+  } else {
+    A = y / 4;
+    D = y - 4 * A;
+    y = A / 25;
+    C = A - 25 * y;
+    A = y / 4;
+    B = y - 4 * A;
+  }
+}
+
+static const int max_days_in_month[12] = {31,29,31,30,31,30,31,31,30,31,30,31};
+static const int min_days_before_month[12] = {
+  0,
+  31,
+  31+28,
+  31+28+31,
+  31+28+31+30,
+  31+28+31+30+31,
+  31+28+31+30+31+30,
+  31+28+31+30+31+30+31,
+  31+28+31+30+31+30+31+31,
+  31+28+31+30+31+30+31+31+30,
+  31+28+31+30+31+30+31+31+30+31,
+  31+28+31+30+31+30+31+31+30+31+30
+};
+
+
+bool ComposeDay(const int y,const int m,const int d,int &day) {
+  if (m < 0 || m >= 12 || d < 0 || d >= max_days_in_month[m]) return false;
+  int A;
+  unsigned int B,C,D;
+  DecomposeYear(y,A,B,C,D);
+  if (m < 2) {
+      // no leap year: check for Feb 29th:
+    if ((m == 1) && (d == 28) && !((D == 0) && ((C != 0) || (B == 0)))) return false;
+    if (D != 0) D--;
+    else {
+      D = 3;
+      if (C != 0) C--;
+      else {
+        C = 24;
+        if (B != 0) B--;
+        else {
+          B = 3;
+          A--;
+        }
+      }
+    }
+  }
+  day = 365*y + 97*A + 24*B + C + min_days_before_month[m] + d + 1
+      + (30*365+7)-5*(400*365+97); // 1970
+  return true;
+}
+
+
+class TelescopeIOptron::CommandGetTime : public TelescopeIOptron::Command {
+public:
+  CommandGetTime(TelescopeIOptron &telescope) : Command(telescope) {}
+  void execAsync(void) override {
+    sendGetTimeRqu();
+  }
+  void print(std::ostream &o) const override {o << "CommandGetTime";}
+private:
+  void sendGetTimeRqu(void) {
+    telescope.sendRqu(":GLT#",5,std::bind(&TelescopeIOptron::CommandGetTime::recvGetTimeRsp,this));
+  }
+    // 012345678901234567
+    // sMMMdYYMMDDHHMMSS#
+    // +0600231217211602#
+  int recvGetTimeRsp(void) {
+    if (telescope.recv_used < 18) {
+//      std::cout << PrintTime() << " "
+//                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+//                << std::string(telescope.recv_buf,telescope.recv_used)
+//                << "\": response not complete yet" << std::endl;
+      return 0;
+    }
+    if (telescope.recv_buf[17] != '#') {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": no '#' at end, ignoring response" << std::endl;
+      return -1;
+    }
+    const bool offest_sign = (telescope.recv_buf[0] == '-');
+    if (!offest_sign && (telescope.recv_buf[0] != '+')) {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": offset sign must be '+' or '-', ignoring response" << std::endl;
+      return -1;
+    }
+    unsigned int abs_offset; // minutes
+    if (!ParseDecimal(telescope.recv_buf+1,3,abs_offset)) {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad offset: no number, ignoring response" << std::endl;
+      return -1;
+    }
+    const int offset = offest_sign ? (-(int)abs_offset) : ((int)abs_offset);
+    if (offset < -720 || offset > 780) {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad offset: " << offset << ", ignoring response"  << std::endl;
+      return -1;
+    }
+    const bool dst = (telescope.recv_buf[4] == '1');
+    if (!dst && (telescope.recv_buf[4] != '0')) {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": dst must be '0' or '1', ignoring response" << std::endl;
+      return -1;
+    }
+    unsigned int year;
+    if (!ParseDecimal(telescope.recv_buf+5,2,year)) {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad year: no number, ignoring response" << std::endl;
+      return -1;
+    }
+    year += 2000;
+    unsigned int month;
+    if (!ParseDecimal(telescope.recv_buf+7,2,month)) {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad month: no number, ignoring response" << std::endl;
+      return -1;
+    }
+    if (month < 1 || month > 12)  {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad month: " << month << ", ignoring response" << std::endl;
+      return -1;
+    }
+    month--;
+    unsigned int day;
+    if (!ParseDecimal(telescope.recv_buf+9,2,day)) {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad day: no number, ignoring response" << std::endl;
+      return -1;
+    }
+    if (day < 1 || day > (unsigned int)(max_days_in_month[month]))  {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad day: " << day << ", ignoring response" << std::endl;
+      return -1;
+    }
+    day--;
+    int day_since_1970;
+    if (!ComposeDay(year,month,day,day_since_1970)) {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": invalid date: "
+                << year << '.' << (month+1) << '.' << (day+1)
+                << ", ignoring response" << std::endl;
+      return -1;
+    }
+    unsigned int hour;
+    if (!ParseDecimal(telescope.recv_buf+11,2,hour)) {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad hour: no number, ignoring response" << std::endl;
+      return -1;
+    }
+    if (hour >= 24)  {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad hour: " << hour << ", ignoring response" << std::endl;
+      return -1;
+    }
+    unsigned int minute;
+    if (!ParseDecimal(telescope.recv_buf+13,2,minute)) {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad minute: no number, ignoring response" << std::endl;
+      return -1;
+    }
+    if (minute >= 60)  {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad minute: " << minute << ", ignoring response" << std::endl;
+      return -1;
+    }
+    unsigned int second;
+    if (!ParseDecimal(telescope.recv_buf+15,2,second)) {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad second: no number, ignoring response" << std::endl;
+      return -1;
+    }
+    if (second >= 61)  { // leap minute may contain 61 seconds. Does iOptron know this?
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandGetTime::recvGetTimeRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": bad second: " << second << ", ignoring response" << std::endl;
+      return -1;
+    }
+    const long long int time = (day_since_1970 * 86400LL
+                                 + ((hour*60 + minute - offset) * 60) + second)
+                             * 1000000LL;
+    telescope.timeReceived(time,offset,dst);
+    telescope.getLoc();
+    telescope.commandFinished();
+    return 18;
+  }
+};
+
+void TelescopeIOptron::getTime(void) {
+  if (!next_command_get_loc) {
+    next_command_get_time = std::make_unique<CommandGetTime>(*this);
+  }
+  doSomething();
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+class TelescopeIOptron::CommandSetTime : public TelescopeIOptron::Command {
+public:
+  CommandSetTime(TelescopeIOptron &telescope) : Command(telescope),offset(0) {}
+  void set(const int offset) {
+    CommandSetTime::offset = offset;
+  }
+  void execAsync(void) override {
+    sendSetOffsetRqu();
+  }
+  unsigned int getTimeoutMicros(void) const override {return 2000000;}
+  void print(std::ostream &o) const override {o << "CommandSetTime(tz:" << offset << ')';}
+private:
+    // :SGsMMM#
+  void sendSetOffsetRqu(void) {
+    buf[0] = ':';
+    buf[1] = 'S';
+    buf[2] = 'G';
+    buf[3] = (offset < 0) ? '-' : '+';
+    FillDecimal(buf+4,3,(offset < 0) ? (-offset) : offset);
+    buf[7] = '#';
+    telescope.sendRqu(buf,8,std::bind(&TelescopeIOptron::CommandSetTime::recvOffsetRsp,this));
+  }
+  int recvOffsetRsp(void) {
+    if (telescope.recv_buf[0] != '1') {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandSetTime(tz:" << offset << ")::recvOffsetRsp \""
+                << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
+                   "SG: Bad Response" << std::endl;
+      return -1;
+    }
+    sendDateRqu();
+    return 1;
+  }
+    // 0123456789
+    // :SCYYMMDD#
+    // :SLHHMMSS#
+  void sendDateRqu(void) {
+    const long long int x = GetNow() / 1000000LL + offset*60;
+    const int day_since_1970 = x / 86400LL;
+    unsigned int second = x - 86400LL * day_since_1970;
+    unsigned int minute = second / 60;
+    second -= 60 * minute;
+    unsigned int hour = minute / 60;
+    minute -= 60 * hour;
+    int year,month,day;
+    DecomposeDay(day_since_1970,year,month,day);
+    buf[0] = ':';
+    buf[1] = 'S';
+    buf[2] = 'C';
+    FillDecimal(buf+3,2,year-2000);
+    FillDecimal(buf+5,2,month+1);
+    FillDecimal(buf+7,2,day+1);
+    buf[9] = '#';
+    buf[10] = ':';
+    buf[11] = 'S';
+    buf[12] = 'L';
+    FillDecimal(buf+13,2,hour);
+    FillDecimal(buf+15,2,minute);
+    FillDecimal(buf+17,2,second);
+    buf[19] = '#';
+    telescope.sendRqu(buf,10,std::bind(&TelescopeIOptron::CommandSetTime::recvDateRsp,this));
+  }
+  int recvDateRsp(void) {
+    if (telescope.recv_buf[0] != '1') {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandSetTime(tz:" << offset << ")::recvDateRsp \""
+                << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
+                   "SC: Bad Response" << std::endl;
+      return -1;
+    }
+    sendTimeRqu();
+    return 1;
+  }
+  void sendTimeRqu(void) {
+    telescope.sendRqu(buf+10,10,std::bind(&TelescopeIOptron::CommandSetTime::recvTimeRsp,this));
+  }
+  int recvTimeRsp(void) {
+    if (telescope.recv_buf[0] != '1') {
+      std::cout << PrintTime() << " "
+                   "TelescopeIOptron::CommandSetTime(tz:" << offset << ")::recvTimeRsp \""
+                << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
+                   "SL: Bad Response" << std::endl;
+      return -1;
+    }
+    telescope.getTime();
+    telescope.commandFinished();
+    return 1;
+  }
+private:
+  int offset;
+  char buf[20];
+};
+
+void TelescopeIOptron::setTime(void) {
+  std::cout << PrintTime() << " "
+               "TelescopeIOptron::setTime" << std::endl;
+  if (!next_command_set_time) {
+    next_command_set_time = std::make_unique<CommandSetTime>(*this);
+  }
+  next_command_set_time->set(timezone_offset);
+  doSomething();
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 //------------------------------------------------------------------------
@@ -1007,7 +1502,7 @@ void TelescopeIOptron::positionReceived(const IOptronRaDec &ra_dec) {
                 << ", Az:" << PrintRaRad(az) << ", Alt:" << PrintDecRad(alt);
 #endif
 
-    if (alt < -2.0*(M_PI/180) || // allow observing terrestrial objects
+    if (alt < 1.0*(M_PI/180) || // CEM60 allows no goto 1 degree Altitude
         ForbiddenDecHA(ra_dec.getDecInt(),hour_angle_int)) {
         // GOTO hour angle 1h, keep dec
       const unsigned int goto_ra_int = W_int-longitude_int-(0x40000003u/6u);
@@ -1514,11 +2009,14 @@ void TelescopeIOptron::guide(int d_ra_micros,int d_dec_micros) {
 
 
 void TelescopeIOptron::init(unsigned int drain_micros) {
+  timezone_offset = 0;
   get_pos_deadline.cancel();
   if (!next_command_init) {
     next_command_init = std::make_unique<CommandInit>(*this,drain_micros);
   }
   next_command_get_loc.reset();
+  next_command_get_time.reset();
+  next_command_set_time.reset();
   next_command_get_pos.reset();
   next_command_goto.reset();
   next_command_move.reset();
@@ -1542,6 +2040,12 @@ void TelescopeIOptron::doSomething(void) {
   } else if (next_command_get_loc) {
 //      std::cout << "doSomething: get_loc" << std::endl;
     curr_command = std::move(next_command_get_loc);
+  } else if (next_command_get_time) {
+//      std::cout << "doSomething: get_time" << std::endl;
+    curr_command = std::move(next_command_get_time);
+  } else if (next_command_set_time) {
+//      std::cout << "doSomething: set_time" << std::endl;
+    curr_command = std::move(next_command_set_time);
   } else if (next_command_get_pos) {
 //      std::cout << "doSomething: get_pos" << std::endl;
     curr_command = std::move(next_command_get_pos);
