@@ -250,43 +250,35 @@ int main(int argc,char *argv[]) {
 
     while (continue_looping) {
       boost::asio::ip::tcp::resolver resolver(io_context);
-      boost::asio::ip::tcp::socket socket(io_context);
+      boost::asio::ip::tcp::resolver::results_type endpoints =
+        resolver.resolve(argv[1],argv[2]);
 
-      resolver.async_resolve(
-        boost::asio::ip::tcp::resolver::query(argv[1],argv[2]),
-        [s=&socket]
-            (const boost::system::error_code &ec,
-             boost::asio::ip::tcp::resolver::results_type endpoints) {
+      std::cerr << PrintTime() << " "
+                   "start connecting..." << std::endl;
+
+      boost::asio::ip::tcp::socket socket(io_context);
+      boost::asio::async_connect(
+        socket,endpoints,
+        [s = &socket](const boost::system::error_code &ec,
+                      const boost::asio::ip::tcp::endpoint &endpoint) {
           if (ec) {
             std::cerr << PrintTime() << " "
-                         "resolving failed: " << ec.message() << std::endl;
+                         "connect failed: " << ec.message() << std::endl;
             throw nullptr;
           }
-          std::cerr << PrintTime() << " "
-                       "start connecting..." << std::endl;
-          boost::asio::async_connect(
-            *s,endpoints,
-            [s](const boost::system::error_code &ec,
-                     const boost::asio::ip::tcp::endpoint &endpoint) {
-              if (ec) {
-                std::cerr << PrintTime() << " "
-                             "connect failed: " << ec.message() << std::endl;
-                throw nullptr;
-              }
-                // disable Nagler algorithm
-              s->set_option(boost::asio::ip::tcp::no_delay(true));
+            // disable Nagler algorithm
+          s->set_option(boost::asio::ip::tcp::no_delay(true));
 
-              std::cerr << PrintTime() << " "
-                           "connect ok" << std::endl;
-              client
-                = TcpIpConnection::Create(
-                    std::move(*s),
-                    HandleStellariumTelescopeProtocolServerMsg,
-                    [](const boost::system::error_code &error,
-                       TcpIpConnection &c) {
-                      throw nullptr;
-                    });
-            });
+          std::cerr << PrintTime() << " "
+                       "connect ok" << std::endl;
+          client
+            = TcpIpConnection::Create(
+                std::move(*s),
+                HandleStellariumTelescopeProtocolServerMsg,
+                [](const boost::system::error_code &error,
+                   TcpIpConnection &c) {
+                  throw nullptr;
+                });
         });
       try {
         io_context.run();

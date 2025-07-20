@@ -241,7 +241,7 @@ TelescopeLX200::TelescopeLX200(const std::string &args,
                   get_pos_deadline(io_context),
                   move_deadline(io_context),
                   language_v3(false) {
-  io_context.dispatch(std::bind(&TelescopeLX200::initialize,this));
+  boost::asio::dispatch(io_context,std::bind(&TelescopeLX200::initialize,this));
   std::cout << PrintTime() << " "
                "TelescopeLX200::TelescopeLX200(" << args << ')' << std::endl;
 }
@@ -604,7 +604,7 @@ private:
   void sendSetTimeZoneRqu(void) {
     TZSET();
     int time_zone = TIMEZONE;
-    int is_dst = DAYLIGHT;
+    int is_dst = 0; //DAYLIGHT;
       // :SGsHH.H#
       // Set the number of hours added to local time to yield UTC
     gmt_offset = time_zone - (is_dst ? 3600 : 0);
@@ -1039,8 +1039,7 @@ void TelescopeLX200::positionReceived(const LX200RaDec &ra_dec) {
       end_of_last_goto = now + expected_duration;
 
 #ifdef PRINT_PERIODIC_POSITION
-        std::cout << PrintRaInt(hour_angle_int)
-                  << " FORBIDDEN, "
+        std::cout << " FORBIDDEN, "
                      "expecting " << expected_duration << "us for "
                      "GOTO("
                   << "Ra:" << PrintRaInt(goto_ra_int)
