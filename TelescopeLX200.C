@@ -465,7 +465,7 @@ void TelescopeLX200::initialize(void) {
   serial.set_option(boost::asio::serial_port_base::parity(boost::asio::serial_port_base::parity::none));
   serial.set_option(boost::asio::serial_port_base::flow_control(boost::asio::serial_port_base::flow_control::none));
   std::cout << PrintTime() << " "
-               "TelescopeLX200::initialize: serial port " << serial_device << "opened" << std::endl;
+               "TelescopeLX200::initialize: serial port " << serial_device << " opened" << std::endl;
   initPrecessionMatrix();
   init(0);
 }

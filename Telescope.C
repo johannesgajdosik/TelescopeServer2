@@ -53,7 +53,7 @@ Telescope::Create(const std::string &type_and_args,
                       std::move(opened_closed),
                       std::move(announce_position),
                       io_context));
-  if (rval->initializationOk()) return rval;
+  if (rval && rval->initializationOk()) return rval;
   return Ptr();
 }
 

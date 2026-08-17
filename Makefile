@@ -26,13 +26,13 @@ echo:
 	echo $(TelescopeServer2_OBJECTS)
 
 TelescopeServer2: $(TelescopeServer2_OBJECTS)
-	g++ $(TelescopeServer2_OBJECTS) -o $@
+	g++ $(TelescopeServer2_OBJECTS) -o $@ -lpthread
 
 TelescopeClient2: $(TelescopeClient2_OBJECTS)
-	g++ $(TelescopeClient2_OBJECTS) -o $@
+	g++ $(TelescopeClient2_OBJECTS) -o $@ -lpthread
 
 TelescopeJoystickClient: $(TelescopeJoystickClient_OBJECTS)
-	g++ $(TelescopeJoystickClient_OBJECTS) -o $@
+	g++ $(TelescopeJoystickClient_OBJECTS) -o $@ -lpthread
 
 clean:
 	rm -f \
