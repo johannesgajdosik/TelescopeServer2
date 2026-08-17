@@ -333,7 +333,7 @@ TelescopeIOptron::TelescopeIOptron(const std::string &args,
                   get_pos_deadline(io_context),
                   move_deadline(io_context),
                   language_v3(false) {
-  io_context.dispatch(std::bind(&TelescopeIOptron::initialize,this));
+  boost::asio::dispatch(io_context,std::bind(&TelescopeIOptron::initialize,this));
   std::cout << PrintTime() << " "
                "TelescopeIOptron::TelescopeIOptron(" << args << ')' << std::endl;
 }

@@ -255,7 +255,7 @@ TelescopeLX200::TelescopeLX200(const char startup_alignment_mode,
                   get_pos_deadline(io_context),
                   move_deadline(io_context),
                   language_v3(false) {
-  io_context.dispatch(std::bind(&TelescopeLX200::initialize,this));
+  boost::asio::dispatch(io_context,std::bind(&TelescopeLX200::initialize,this));
   std::cout << PrintTime() << " "
                "TelescopeLX200::TelescopeLX200(" << startup_alignment_mode << ',' << serial_device << ')'
             << std::endl;

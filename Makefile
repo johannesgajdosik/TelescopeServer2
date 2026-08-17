@@ -10,7 +10,7 @@ TelescopeJoystickClient_SOURCES = TelescopeJoystickClient.C PrintRaDec.C Time.C
 
 TelescopeJoystickClient_OBJECTS = $(patsubst %.c,%.o,$(patsubst %.C,%.o,$(TelescopeJoystickClient_SOURCES)))
 
-COMPILEFLAGS = -std=c++14 -g -O0 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
+COMPILEFLAGS = -std=c++14 -g -O3 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
 
 .SUFFIXES: .C .c .o .obj
 
@@ -26,13 +26,13 @@ echo:
 	echo $(TelescopeServer2_OBJECTS)
 
 TelescopeServer2: $(TelescopeServer2_OBJECTS)
-	g++ $(TelescopeServer2_OBJECTS) -o $@ -lpthread
+	g++ $(TelescopeServer2_OBJECTS) -o $@
 
 TelescopeClient2: $(TelescopeClient2_OBJECTS)
-	g++ $(TelescopeClient2_OBJECTS) -o $@ -lpthread
+	g++ $(TelescopeClient2_OBJECTS) -o $@
 
 TelescopeJoystickClient: $(TelescopeJoystickClient_OBJECTS)
-	g++ $(TelescopeJoystickClient_OBJECTS) -o $@ -lpthread
+	g++ $(TelescopeJoystickClient_OBJECTS) -o $@
 
 clean:
 	rm -f \
