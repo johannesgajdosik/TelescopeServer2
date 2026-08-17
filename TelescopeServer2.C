@@ -32,10 +32,11 @@
 
 static Telescope::Ptr telescope;
 
-static void HandleMsgGoto(unsigned int ra_int,int dec_int) {
+static void HandleMsgGoto(unsigned int ra_int,int dec_int,
+                          Telescope::CoordinateSystem coordinate_system) {
 //  std::cout << "HandleMsgGoto(" << PrintRaInt(ra_int) << ',' << PrintDecInt(dec_int) << ')'
 //            << std::endl;
-  if (telescope) telescope->gotoPosition(ra_int,dec_int);
+  if (telescope) telescope->gotoPosition(ra_int,dec_int,coordinate_system);
 }
 
 static void HandleMsgGuide(int d_ra_micros,int d_dec_micros) {
@@ -53,24 +54,32 @@ static void HandleMsgMove(short int horz,short int vert,unsigned int micros) {
 static int HandleStellariumTelescopeProtocolServerMsg(
              const void *data,int size,TcpIpConnection &c) {
   if (size < 4) return 0;
-  const int length = reinterpret_cast<const unsigned short*>(data)[0];
+  const int msg_length = reinterpret_cast<const unsigned short*>(data)[0];
   const unsigned short type = reinterpret_cast<const unsigned short*>(data)[1];
-  if (size < length) return 0;
+  if (size < msg_length) return 0;
   switch (type) {
     case 0:
-      if (length < 20) return -1;
-      HandleMsgGoto(
-        reinterpret_cast<const unsigned int*>(data)[3],
-        reinterpret_cast<const int*>(data)[4]);
+      if (msg_length < 20) return -1;
+      {
+        const unsigned int ra_int = reinterpret_cast<const unsigned int*>(data)[3];
+        const int dec_int = reinterpret_cast<const int*>(data)[4];
+        Telescope::CoordinateSystem coordinate_system
+          = Telescope::CoordinateSystem::J2000;
+        if (msg_length >= 28) {
+          coordinate_system
+            = reinterpret_cast<const Telescope::CoordinateSystem*>(data)[6];
+        }
+        HandleMsgGoto(ra_int,dec_int,coordinate_system);
+      }
       break;
     case 1:
-      if (length < 20) return -1;
+      if (msg_length < 20) return -1;
       HandleMsgGuide(
         reinterpret_cast<const int*>(data)[3],
         reinterpret_cast<const int*>(data)[4]);
       break;
     case 2:
-      if (length < 20) return -1;
+      if (msg_length < 20) return -1;
       HandleMsgMove(
         reinterpret_cast<const short*>(data)[6],
         reinterpret_cast<const short*>(data)[7],
@@ -79,19 +88,23 @@ static int HandleStellariumTelescopeProtocolServerMsg(
         // just ignore
       break;
   }
-  return length;
+  return msg_length;
 }
 
 static
-void BroadcastPosition(unsigned int ra_int,int dec_int,AcceptPort &server) {
-  unsigned char msg[24];
-  *reinterpret_cast<unsigned short*>(&msg) = 24;
+void BroadcastPosition(unsigned int ra_int,int dec_int,
+                       Telescope::CoordinateSystem coordinate_system,
+                       AcceptPort &server) {
+  static constexpr int msg_length = 28;
+  unsigned char msg[msg_length];
+  *reinterpret_cast<unsigned short*>(&msg) = msg_length;
   *reinterpret_cast<unsigned short*>(&msg[2]) = 0;
-  *reinterpret_cast<unsigned long long*>(&msg[4]) = 0;
+  *reinterpret_cast<unsigned long long*>(&msg[4]) = 0; // time
   *reinterpret_cast<unsigned int*>(&msg[12]) = ra_int;
   *reinterpret_cast<int*>(&msg[16]) = dec_int;
-  *reinterpret_cast<int*>(&msg[20]) = 0;
-  server.broadcast(msg,24);
+  *reinterpret_cast<int*>(&msg[20]) = 0; // status
+  *reinterpret_cast<int*>(&msg[24]) = static_cast<int>(coordinate_system);
+  server.broadcast(msg,msg_length);
 }
 
 
@@ -138,8 +151,9 @@ int main(int argc,char *argv[]) {
                                       if (opened_closed) server.start();
                                       else server.stop();
                                     },
-                                    [&server](unsigned int ra_int,int dec_int) {
-                                      BroadcastPosition(ra_int,dec_int,server);
+                                    [&server](unsigned int ra_int,int dec_int,
+                                              Telescope::CoordinateSystem coordinate_system) {
+                                      BroadcastPosition(ra_int,dec_int,coordinate_system,server);
                                     },
                                     io_context);
       if (telescope) {
@@ -156,6 +170,9 @@ int main(int argc,char *argv[]) {
           }
         }
         telescope.reset();
+      } else {
+        std::cerr << PrintTime() << " "
+                     "Telescope::Create failed" << std::endl;
       }
       // TODO: the serial connection is destroyed after the telescope.
       // methods of the telescope object could be called after destruction.

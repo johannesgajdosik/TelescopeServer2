@@ -143,14 +143,15 @@ private:
   void setTime(void);
 
     // telescope pointing position in the sky
-  void positionReceived(const IOptronRaDec &ra_dec);
+  void positionReceivedEquatorial(const IOptronRaDec &ra_dec);
   class CommandGetPos;
   void getPos(void);
 
     // Goto
   class CommandGoto;
-  void gotoPosition(const IOptronRaDec &ra_dec);
-  void gotoPosition(const unsigned int ra_int_j2000,const int dec_int_j2000) override;
+  void gotoPositionEquatorial(const IOptronRaDec &ra_dec);
+  void gotoPosition(const unsigned int ra_int_j2000,const int dec_int_j2000,
+                    CoordinateSystem coordinate_system) override;
 
     // move
   class CommandMove;
@@ -1451,15 +1452,14 @@ void TelescopeIOptron::setTime(void) {
 
 //---------------Pointing Position----------------------------------------
 
-void TelescopeIOptron::positionReceived(const IOptronRaDec &ra_dec) {
-  const double ra0 = ra_dec.getRaRad();
-  const Vector<double,3> v0 = PolarToRect(ra0,ra_dec.getDecRad());
-  const Vector<double,3> v = precession_matrix*v0;
+void TelescopeIOptron::positionReceivedEquatorial(const IOptronRaDec &ra_dec) {
+  const Vector<double,3> v_equatorial = PolarToRect(ra_dec.getRaRad(),ra_dec.getDecRad());
+  const Vector<double,3> v_j2000 = precession_matrix*v_equatorial;
   double ra_j2000,dec_j2000;
-  RectToPolar(v,ra_j2000,dec_j2000);
+  RectToPolar(v_j2000,ra_j2000,dec_j2000);
   const unsigned int  ra_int_j2000 = (unsigned int)floor(0.5+ ra_j2000*(2147483648.0/M_PI));
   const          int dec_int_j2000 =          (int)floor(0.5+dec_j2000*(2147483648.0/M_PI));
-  announce_position(ra_int_j2000,dec_int_j2000);
+  announce_position(ra_int_j2000,dec_int_j2000,CoordinateSystem::J2000);
 
     // from here on: check if telescope might bumps into gate
   const long long int now = GetNow();
@@ -1476,9 +1476,9 @@ void TelescopeIOptron::positionReceived(const IOptronRaDec &ra_dec) {
     = Matrix<double,3,3>( sW,-cW,0.0,
                           cW, sW,0.0,
                          0.0,0.0,1.0);
-  if (latitude_int > 0x40000000) {
+  if (latitude_int > 0x40000000 || latitude_int < -0x40000000) {
     std::cout << PrintTime() << " "
-                 "TelescopeIOptron::positionReceived" << ra_dec << ": "
+                 "TelescopeIOptron::positionReceivedEquatorial" << ra_dec << ": "
                  "J2000(Ra:" << PrintRaInt(ra_int_j2000)
               << ",Dec:" << PrintDecInt(dec_int_j2000) << "): "
                  "geographic location unknown, cannot check for forbidden position"
@@ -1490,12 +1490,12 @@ void TelescopeIOptron::positionReceived(const IOptronRaDec &ra_dec) {
     Matrix<double,3,3> equat_orientation = geographic_pos_orientation
                                          * earth_orientation;
     double az,alt;
-    RectToPolar(equat_orientation*v0,az,alt);
+    RectToPolar(equat_orientation*v_equatorial,az,alt);
 #define PRINT_PERIODIC_POSITION
 
 #ifdef PRINT_PERIODIC_POSITION
       std::cout << PrintTime() << " "
-                   "TelescopeIOptron::positionReceived" << ra_dec << ": "
+                   "TelescopeIOptron::positionReceivedEquatorial" << ra_dec << ": "
                    "J2000(Ra:" << PrintRaInt(ra_int_j2000)
                 << ",Dec:" << PrintDecInt(dec_int_j2000) << "), "
                    "H:" << PrintRaInt(hour_angle_int)
@@ -1523,7 +1523,7 @@ void TelescopeIOptron::positionReceived(const IOptronRaDec &ra_dec) {
                   << "Ra:" << PrintRaInt(goto_ra_int)
                   << ",dec:" << PrintDecInt(goto_dec_int) << ')';
 #endif
-      gotoPosition(IOptronRaDec(goto_ra_int,goto_dec_int));
+      gotoPositionEquatorial(IOptronRaDec(goto_ra_int,goto_dec_int));
     }
 #ifdef PRINT_PERIODIC_POSITION
       std::cout << std:: endl;
@@ -1593,7 +1593,7 @@ private:
 //                 "TelescopeIOptron::CommandGetPos::recvGetPosRsp: \""
 //                << std::string(telescope.recv_buf,telescope.recv_used)
 //                << "\" ok: " << ra_dec << std::endl;
-    telescope.positionReceived(ra_dec);
+    telescope.positionReceivedEquatorial(ra_dec);
     telescope.get_pos_deadline.expires_from_now(boost::posix_time::microseconds(500000));
     telescope.get_pos_deadline.async_wait(
       [t = &telescope](const boost::system::error_code &e) {
@@ -1726,9 +1726,9 @@ private:
   char buf[13];
 };
 
-void TelescopeIOptron::gotoPosition(const IOptronRaDec &ra_dec) {
+void TelescopeIOptron::gotoPositionEquatorial(const IOptronRaDec &ra_dec) {
   std::cout << PrintTime() << " "
-               "TelescopeIOptron::gotoPosition" << ra_dec << std::endl;
+               "TelescopeIOptron::gotoPositionEquatorial" << ra_dec << std::endl;
   if (!next_command_goto) {
     next_command_goto = std::make_unique<CommandGoto>(*this);
   }
@@ -1736,18 +1736,22 @@ void TelescopeIOptron::gotoPosition(const IOptronRaDec &ra_dec) {
   doSomething();
 }
 
-void TelescopeIOptron::gotoPosition(const unsigned int ra_int_j2000,const int dec_int_j2000) {
-//    if (dec_int_j2000 < -0x40000000 || dec_int_j2000 > 0x40000000) abort();
+void TelescopeIOptron::gotoPosition(unsigned int ra_int,int dec_int,
+                                    const CoordinateSystem coordinate_system) {
+  if (coordinate_system == CoordinateSystem::J2000) {
+    const Vector<double,3> v_j2000 = PolarToRect( ra_int * (M_PI/2147483648.0),
+                                                 dec_int * (M_PI/2147483648.0) );
+    const Vector<double,3> v_equatorial = v_j2000*precession_matrix;
+    double ra,dec;
+    RectToPolar(v_equatorial,ra,dec);
+    if (dec < -0.5*M_PI || dec > 0.5*M_PI) abort();
+    ra_int = (unsigned int)floor(0.5+ ra*(2147483648.0/M_PI));
+    dec_int =         (int)floor(0.5+dec*(2147483648.0/M_PI));
+  } else {
+//    if (dec_int < -0x40000000 || dec_int > 0x40000000) abort();
+  }
 
-  const Vector<double,3> v0 = PolarToRect( ra_int_j2000 * (M_PI/2147483648.0),
-                                          dec_int_j2000 * (M_PI/2147483648.0) );
-  const Vector<double,3> v = v0*precession_matrix;
-  double ra,dec;
-  RectToPolar(v,ra,dec);
-  if (dec < -0.5*M_PI || dec > 0.5*M_PI) abort();
-  IOptronRaDec ra_dec( (unsigned int)floor(0.5+ ra*(2147483648.0/M_PI)),
-                                (int)floor(0.5+dec*(2147483648.0/M_PI)) );
-  gotoPosition(ra_dec);
+  gotoPositionEquatorial(IOptronRaDec(ra_int,dec_int));
 }
 
 //------------------------------------------------------------------------

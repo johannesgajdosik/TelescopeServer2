@@ -38,7 +38,7 @@ std::ostream &operator<<(std::ostream &o,const PrintRaSeconds &x) {
   *--p = '0' + i;
   if (i>2) abort();
   return o << buff;
-};
+}
 
 std::ostream &operator<<(std::ostream &o,const PrintDecSeconds &x) {
   char buff[10];
@@ -88,7 +88,7 @@ std::ostream &operator<<(std::ostream &o,const PrintRaMilliseconds &x) {
   *--p = '0' + i;
   if (i>2) abort();
   return o << buff;
-};
+}
 
 std::ostream &operator<<(std::ostream &o,const PrintDecCentiseconds &x) {
   char buff[13];

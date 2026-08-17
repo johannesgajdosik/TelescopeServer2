@@ -18,6 +18,7 @@
  */
 
 #include "Connection.H"
+#include "Telescope.H"
 
 #include <boost/asio.hpp>
 
@@ -26,40 +27,72 @@
 
 static TcpIpConnection::Ptr client;
 
-static void HandleMsgCurrentPosition(unsigned int ra_int,int dec_int) {
-  std::cout << "HandleMsgCurrentPosition(" << ra_int << ',' << dec_int << ')'
+static int ParseCoordinateSystem(const char str[]) {
+  if (!str) return -1;
+  if (0 == strcmp(str,"J2000")) return 0;
+  if (0 == strcmp(str,"equatorial")) return 1;
+  if (0 == strcmp(str,"azimut")) return 2;
+  if (0 == strcmp(str,"land")) return 3;
+  return -1;
+}
+
+const char *CoordinateSystemToString(Telescope::CoordinateSystem coordinate_system) {
+  switch (coordinate_system) {
+    case Telescope::CoordinateSystem::J2000: return "J2000";
+    case Telescope::CoordinateSystem::equatorial: return "equatorial";
+    case Telescope::CoordinateSystem::azimut: return "azimut";
+    case Telescope::CoordinateSystem::land: return "land";
+  }
+  return "undefined";
+}
+
+static void HandleMsgCurrentPosition(unsigned int ra_int,int dec_int,
+                                     Telescope::CoordinateSystem coordinate_system) {
+  std::cout << "HandleMsgCurrentPosition(" << ra_int << ',' << dec_int << ','
+            << CoordinateSystemToString(coordinate_system) << ')'
             << std::endl;
 }
 
-static void SendMsgGoto(unsigned int ra_int,int dec_int) {
-  unsigned char msg[24];
-  *reinterpret_cast<unsigned short*>(&msg) = 24;
+static void SendMsgGoto(unsigned int ra_int,int dec_int,
+                        Telescope::CoordinateSystem coordinate_system) {
+  static constexpr int msg_length = 28;
+  unsigned char msg[msg_length];
+  *reinterpret_cast<unsigned short*>(&msg) = msg_length;
   *reinterpret_cast<unsigned short*>(&msg[2]) = 0;
-  *reinterpret_cast<unsigned long long*>(&msg[4]) = 0;
+  *reinterpret_cast<unsigned long long*>(&msg[4]) = 0; // time
   *reinterpret_cast<unsigned int*>(&msg[12]) = ra_int;
   *reinterpret_cast<int*>(&msg[16]) = dec_int;
-  *reinterpret_cast<int*>(&msg[20]) = 0;
-  client->write(msg,24);
+  *reinterpret_cast<int*>(&msg[20]) = 0; // status
+  *reinterpret_cast<int*>(&msg[24]) = static_cast<int>(coordinate_system);
+  client->write(msg,msg_length);
 }
 
 static int HandleStellariumTelescopeProtocolServerMsg(
              const void *data,int size,TcpIpConnection &c) {
   if (size < 4) return 0;
-  const int length = reinterpret_cast<const unsigned short*>(data)[0];
+  const int msg_length = reinterpret_cast<const unsigned short*>(data)[0];
   const unsigned short type = reinterpret_cast<const unsigned short*>(data)[1];
-  if (size < length) return 0;
+  if (size < msg_length) return 0;
   switch (type) {
     case 0:
-      if (length < 20) return -1;
-      HandleMsgCurrentPosition(
-        reinterpret_cast<const unsigned int*>(data)[3],
-        reinterpret_cast<const int*>(data)[4]);
+      if (msg_length < 20) return -1;
+      {
+        const unsigned int ra_int = reinterpret_cast<const unsigned int*>(data)[3];
+        const int dec_int = reinterpret_cast<const int*>(data)[4];
+        Telescope::CoordinateSystem coordinate_system
+          = Telescope::CoordinateSystem::J2000;
+        if (msg_length >= 28) {
+          coordinate_system
+            = reinterpret_cast<const Telescope::CoordinateSystem*>(data)[6];
+        }
+        HandleMsgCurrentPosition(ra_int,dec_int,coordinate_system);
+      }
       break;
     default:
         // just ignore
       break;
   }
-  return length;
+  return msg_length;
 }
 
 int ParseUInt(char *&str) {
@@ -147,13 +180,13 @@ int ScanDMS(char *str) {
   return ScanDorHMS(str,'d');
 }
 
-
 int main(int argc,char *argv[]) {
   int port;
   if (argc < 3 || !(std::istringstream(argv[2])>>port) ||
       port <= 0 || port >= 0x10000) {
-    std::cerr << "Usage:   " << argv[0] << " <host> <port> [<ra> <dec>]\n"
-                 "Example: " << argv[0] << " localhost 10000 22h42m54s 56d40m06s"
+    std::cerr << "Usage:   " << argv[0] << " <host> <port> [<ra> <dec> [<coordinate_system>]]\n"
+                 "Examples: " << argv[0] << " localhost 10000 22h42m54s 56d40m06s\n"
+                 "          " << argv[0] << " localhost 10000 0 0 land"
               << std::endl;
     return 1;
   }
@@ -174,14 +207,24 @@ int main(int argc,char *argv[]) {
   if (argc >= 5) {
     int ra = ScanHMS(argv[3]);
     int dec = ScanDMS(argv[4]);
+    int coordinate_system = 0;
+    if (argc >= 6) {
+      coordinate_system = ParseCoordinateSystem(argv[5]);
+      if (coordinate_system < 0) {
+        std::cerr << "bad coordinate system \"" << argv[5] << '"'
+                  << std::endl;
+        return 1;
+      }
+    }
     if (ra != std::numeric_limits<int>::min() &&
         dec != std::numeric_limits<int>::min()) {
       const unsigned int ra_int = (((long long int)ra)<<32) / (24*3600);
       const unsigned int dec_int = (((long long int)dec)<<32) / (360*3600);
-      SendMsgGoto(ra_int,dec_int);
+      SendMsgGoto(ra_int,dec_int,
+                  static_cast<Telescope::CoordinateSystem>(coordinate_system));
     } else {
       std::cerr << "<ra> <dec> must be given like 13h2m12s -90d00m00s"
-              << std::endl;
+                << std::endl;
       return 1;
     }
   }

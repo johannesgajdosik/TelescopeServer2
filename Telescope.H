@@ -32,7 +32,14 @@ namespace boost {namespace asio {class io_context;}}
 class Telescope : public IntrusiveBase {
 public:
   typedef boost::intrusive_ptr<Telescope> Ptr;
-  typedef std::function<void(unsigned int ra_int,int dec_int)
+  enum class CoordinateSystem : int {
+    J2000 = 0,
+    equatorial = 1,
+    azimut = 2,
+    land = 3, // telescope relative, no tracking
+  };
+  typedef std::function<void(unsigned int ra_int,int dec_int,
+                             CoordinateSystem coordinate_system)
                        > PositionFunction;
   typedef std::function<void(bool opened_closed)
                        > OpenedClosedFunction;
@@ -47,8 +54,9 @@ public:
                     boost::asio::io_context &io_context);
   static bool RegisterCreationFunction(const std::string &type,
                                        CreationFunction &&f);
-  virtual ~Telescope(void) {}
-  virtual void gotoPosition(unsigned int ra_int,int dec_int) = 0;
+  virtual ~Telescope(void) = 0;
+  virtual void gotoPosition(unsigned int ra_int,int dec_int,
+                            CoordinateSystem coordinate_system) = 0;
   virtual void guide(int d_ra_micros,int d_dec_micros) = 0;
   virtual void move(short int horz,short int vert,
                     unsigned int validity_micros) = 0;
@@ -56,9 +64,7 @@ private:
   virtual bool initializationOk(void) const = 0;
 protected:
   Telescope(OpenedClosedFunction &&opened_closed,
-            PositionFunction &&announce_position)
-    :opened_closed(std::move(opened_closed)),
-     announce_position(std::move(announce_position)) {}
+            PositionFunction &&announce_position);
   const OpenedClosedFunction opened_closed;
   const PositionFunction announce_position;
 };

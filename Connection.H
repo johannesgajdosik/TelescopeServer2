@@ -79,6 +79,10 @@ protected:
     : peer(std::move(peer)),
       recv_handler(std::move(recv_handler)),
       error_handler(std::move(error_handler)) {
+    if (!Connection::recv_handler) {
+      std::cout << "Connection<" << typeid(T).name() << ">::Connection: "
+                   "no recv_handler" << std::endl;
+    }
 //    std::cout << "Connection<" << typeid(T).name() << ">::Connection" << std::endl;
     read();
   }
@@ -100,7 +104,7 @@ protected:
           std::cout << "Connection::write::l: write failed: "
                     << error.message() << std:: endl;
           self->hangup(); // close socket, cancel io
-          self->error_handler(error,*self);
+          if (self->error_handler) self->error_handler(error,*self);
             // do not write again, the connection shall die.
         } else {
           self->send_buf_written += size;
@@ -129,7 +133,11 @@ protected:
           std::cout << "Connection::read::l: read failed: "
                     << error.message() << std:: endl;
           self->hangup(); // close socket, cancel io
-          self->error_handler(error,*self);
+          std::cout << "Connection::read::l: read failed: hangup() called" << std:: endl;
+          if (self->error_handler) {
+            self->error_handler(error,*self);
+            std::cout << "Connection::read::l: read failed: error_handler() called" << std:: endl;
+          }
             // do not read again, the connection shall die.
         } else {
           self->recv_used += size;
@@ -155,7 +163,7 @@ protected:
                         << rc << std::endl;
                 // do not read again
               self->hangup(); // close socket, cancel io
-              self->error_handler(error,*self);
+              if (self->error_handler) self->error_handler(error,*self);
             }
           }
           self->read();

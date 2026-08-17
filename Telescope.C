@@ -28,6 +28,15 @@ static CreationFunctionMap &GetCreationFunctionMap(void) {
   return creation_function_map;
 }
 
+Telescope::~Telescope(void) {
+}
+
+Telescope::Telescope(OpenedClosedFunction &&opened_closed,
+                     PositionFunction &&announce_position)
+          :opened_closed(std::move(opened_closed)),
+           announce_position(std::move(announce_position)) {
+}
+
 Telescope::Ptr
 Telescope::Create(const std::string &type_and_args,
                   OpenedClosedFunction &&opened_closed,

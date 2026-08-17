@@ -116,10 +116,11 @@ public:
   TelescopeLX200(const TelescopeLX200&) = delete;
   TelescopeLX200 &operator=(const TelescopeLX200&) = delete;
 private:
-  TelescopeLX200(const std::string &args,
-                   OpenedClosedFunction &&opened_closed,
-                   PositionFunction &&announce_position,
-                   boost::asio::io_context &io_context);
+  TelescopeLX200(const char startup_alignment_mode,
+                 const std::string &serial_device,
+                 OpenedClosedFunction &&opened_closed,
+                 PositionFunction &&announce_position,
+                 boost::asio::io_context &io_context);
   ~TelescopeLX200(void);
   bool initializationOk(void) const override {return true;}
 
@@ -141,14 +142,15 @@ private:
   void getLoc(void);
 
     // telescope pointing position in the sky
-  void positionReceived(const LX200RaDec &ra_dec);
+  void positionReceivedEquatorial(const LX200RaDec &ra_dec,bool equatorial_or_land);
   class CommandGetPos;
   void getPos(void);
 
     // Goto
   class CommandGoto;
-  void gotoPosition(const LX200RaDec &ra_dec);
-  void gotoPosition(const unsigned int ra_int_j2000,const int dec_int_j2000) override;
+  void gotoPositionEquatorial(const LX200RaDec &ra_dec,bool equatorial_or_land);
+  void gotoPosition(const unsigned int ra_int_j2000,const int dec_int_j2000,
+                    CoordinateSystem coordinate_system) override;
 
     // move
   class CommandMove;
@@ -164,7 +166,9 @@ private:
   void commandFinished(void);
   void doSomething(void);
 private:
-  const std::string args;
+  const char startup_alignment_mode;
+  char current_alignment_mode;
+  const std::string serial_device;
   boost::asio::serial_port serial;
   boost::asio::deadline_timer serial_deadline;
   boost::asio::deadline_timer command_deadline;
@@ -220,21 +224,31 @@ static const bool telescope_LX200_registered
 
 Telescope::Ptr
 TelescopeLX200::Create(const std::string &args,
-                         OpenedClosedFunction &&opened_closed,
-                         PositionFunction &&announce_position,
-                         boost::asio::io_context &io_context) {
-  return new TelescopeLX200(args,
-                              std::move(opened_closed),
-                              std::move(announce_position),
-                              io_context);
+                       OpenedClosedFunction &&opened_closed,
+                       PositionFunction &&announce_position,
+                       boost::asio::io_context &io_context) {
+  const bool has_alignment_mode = (args.size() >= 2 && args[1] == ':');
+  const char startup_alignment_mode = has_alignment_mode ? args[0] : 'P';
+  if (has_alignment_mode &&
+      startup_alignment_mode != 'A' &&
+      startup_alignment_mode != 'P' &&
+      startup_alignment_mode != 'L') return Telescope::Ptr();
+  return new TelescopeLX200(startup_alignment_mode,
+                            has_alignment_mode ? args.substr(2) : args,
+                            std::move(opened_closed),
+                            std::move(announce_position),
+                            io_context);
 }
 
-TelescopeLX200::TelescopeLX200(const std::string &args,
-                                   OpenedClosedFunction &&opened_closed,
-                                   PositionFunction &&announce_position,
-                                   boost::asio::io_context &io_context)
+TelescopeLX200::TelescopeLX200(const char startup_alignment_mode,
+                               const std::string &serial_device,
+                               OpenedClosedFunction &&opened_closed,
+                               PositionFunction &&announce_position,
+                               boost::asio::io_context &io_context)
                  :Telescope(std::move(opened_closed),std::move(announce_position)),
-                  args(args),
+                  startup_alignment_mode(startup_alignment_mode),
+                  current_alignment_mode('\0'),
+                  serial_device(serial_device),
                   serial(io_context),
                   serial_deadline(io_context),
                   command_deadline(io_context),
@@ -243,7 +257,8 @@ TelescopeLX200::TelescopeLX200(const std::string &args,
                   language_v3(false) {
   io_context.dispatch(std::bind(&TelescopeLX200::initialize,this));
   std::cout << PrintTime() << " "
-               "TelescopeLX200::TelescopeLX200(" << args << ')' << std::endl;
+               "TelescopeLX200::TelescopeLX200(" << startup_alignment_mode << ',' << serial_device << ')'
+            << std::endl;
 }
 
 TelescopeLX200::~TelescopeLX200(void) {
@@ -431,10 +446,10 @@ void TelescopeLX200::initialize(void) {
   move_deadline.cancel();
   curr_command.reset();
 
-  serial.open(args,ec);
+  serial.open(serial_device,ec);
   if (ec) {
     std::cout << PrintTime() << " "
-                 "TelescopeLX200::initialize: serial port::open(" << args << ") failed: "
+                 "TelescopeLX200::initialize: serial port::open(" << serial_device << ") failed: "
               << ec.message() << std::endl;
     serial_deadline.expires_from_now(boost::posix_time::microseconds(2000000));
     serial_deadline.async_wait(
@@ -450,7 +465,7 @@ void TelescopeLX200::initialize(void) {
   serial.set_option(boost::asio::serial_port_base::parity(boost::asio::serial_port_base::parity::none));
   serial.set_option(boost::asio::serial_port_base::flow_control(boost::asio::serial_port_base::flow_control::none));
   std::cout << PrintTime() << " "
-               "TelescopeLX200::initialize: serial port " << args << "opened" << std::endl;
+               "TelescopeLX200::initialize: serial port " << serial_device << "opened" << std::endl;
   initPrecessionMatrix();
   init(0);
 }
@@ -475,7 +490,7 @@ private:
       telescope.opened_closed(false);
     }
     if (drain_micros == 0) {
-      sendGetCalendarFormatRqu();
+      sendAlignmentQueryRqu();
       return;
     }
     drain_deadline.expires_from_now(boost::posix_time::microseconds(drain_micros));
@@ -525,7 +540,7 @@ private:
                          "draining finished"
                       << std:: endl;
             telescope.recv_used = 0;
-            sendGetCalendarFormatRqu();
+            sendAlignmentQueryRqu();
             return;
           }
           std::cout << PrintTime() << " "
@@ -543,11 +558,44 @@ private:
         drain();
       });
   }
+  void sendAlignmentQueryRqu(void) {
+    std::cout << PrintTime() << " "
+                 "TelescopeLX200::CommandInit::sendAlignmentQueryRqu: "
+                 "sending ACK" << std::endl;
+    telescope.sendRqu("\x06",1,std::bind(&TelescopeLX200::CommandInit::recvAlignmentQueryRsp,this));
+  }
+  int recvAlignmentQueryRsp(void) {
+    if (telescope.recv_used < 1) return 0;
+    const char *p = telescope.recv_buf;
+    telescope.current_alignment_mode = *p++;
+    std::cout << PrintTime() << " "
+                 "TelescopeLX200::CommandInit::recvAlignmentQueryRsp: \""
+              << telescope.startup_alignment_mode << "\" received" << std::endl;
+    sendGetCalendarFormatRqu();
+    return (p-telescope.recv_buf);
+  }
   void sendGetCalendarFormatRqu(void) {
+    char buf[9];
+    char *p = buf;
+    if (telescope.current_alignment_mode != telescope.startup_alignment_mode) {
+      std::cout << PrintTime() << " "
+                   "TelescopeLX200::CommandInit::sendGetCalendarFormatRqu: "
+                   "changing alignment mode from " << telescope.current_alignment_mode
+                << " to " << telescope.startup_alignment_mode << std::endl;
+      *p++ = ':';
+      *p++ = 'A';
+      *p++ = telescope.startup_alignment_mode;
+      *p++ = '#';
+    }
+    *p++ = ':';
+    *p++ = 'G';
+    *p++ = 'c';
+    *p++ = '#';
+    *p = '\0';
     std::cout << PrintTime() << " "
                  "TelescopeLX200::CommandInit::sendGetCalendarFormatRqu: "
-                 "sending :Gc#" << std::endl;
-    telescope.sendRqu(":Gc#",4,std::bind(&TelescopeLX200::CommandInit::recvGetCalendarFormatRsp,this));
+                 "sending " << buf << std::endl;
+    telescope.sendRqu(buf,p-buf,std::bind(&TelescopeLX200::CommandInit::recvGetCalendarFormatRsp,this));
   }
   int recvGetCalendarFormatRsp(void) {
     if (telescope.recv_used < 3) return 0;
@@ -557,6 +605,7 @@ private:
       p++;
       if (telescope.recv_used < 5) return 0;
     }
+    telescope.current_alignment_mode = telescope.startup_alignment_mode;
     const char *const format = p;
     p += 2;
     if (expect_bracket && *p++ != ')') {
@@ -604,7 +653,7 @@ private:
   void sendSetTimeZoneRqu(void) {
     TZSET();
     int time_zone = TIMEZONE;
-    int is_dst = DAYLIGHT;
+    int is_dst = 0; //DAYLIGHT;
       // :SGsHH.H#
       // Set the number of hours added to local time to yield UTC
     gmt_offset = time_zone - (is_dst ? 3600 : 0);
@@ -977,15 +1026,19 @@ void TelescopeLX200::getLoc(void) {
 
 //---------------Pointing Position----------------------------------------
 
-void TelescopeLX200::positionReceived(const LX200RaDec &ra_dec) {
+void TelescopeLX200::positionReceivedEquatorial(const LX200RaDec &ra_dec,bool equatorial_or_land) {
+  if (!equatorial_or_land) {
+    announce_position(ra_dec.getRaInt(),ra_dec.getDecInt(),CoordinateSystem::land);
+    return;
+  }
   const double ra0 = ra_dec.getRaRad();
-  const Vector<double,3> v0 = PolarToRect(ra0,ra_dec.getDecRad());
-  const Vector<double,3> v = precession_matrix*v0;
+  const Vector<double,3> v_equatorial = PolarToRect(ra0,ra_dec.getDecRad());
+  const Vector<double,3> v_j2000 = precession_matrix*v_equatorial;
   double ra_j2000,dec_j2000;
-  RectToPolar(v,ra_j2000,dec_j2000);
+  RectToPolar(v_j2000,ra_j2000,dec_j2000);
   const unsigned int  ra_int_j2000 = (unsigned int)floor(0.5+ ra_j2000*(2147483648.0/M_PI));
   const          int dec_int_j2000 =          (int)floor(0.5+dec_j2000*(2147483648.0/M_PI));
-  announce_position(ra_int_j2000,dec_int_j2000);
+  announce_position(ra_int_j2000,dec_int_j2000,CoordinateSystem::J2000);
 
     // from here on: check if telescope might bumps into gate
   const long long int now = GetNow();
@@ -1004,7 +1057,7 @@ void TelescopeLX200::positionReceived(const LX200RaDec &ra_dec) {
                          0.0,0.0,1.0);
   if (latitude_int > 0x40000000) {
     std::cout << PrintTime() << " "
-                 "TelescopeLX200::positionReceived" << ra_dec << ": "
+                 "TelescopeLX200::positionReceivedEquatorial" << ra_dec << ": "
                  "J2000(Ra:" << PrintRaInt(ra_int_j2000)
               << ",Dec:" << PrintDecInt(dec_int_j2000) << "): "
                  "geographic location unknown, cannot check for forbidden position"
@@ -1016,11 +1069,11 @@ void TelescopeLX200::positionReceived(const LX200RaDec &ra_dec) {
     Matrix<double,3,3> equat_orientation = geographic_pos_orientation
                                          * earth_orientation;
     double az,alt;
-    RectToPolar(equat_orientation*v0,az,alt);
+    RectToPolar(equat_orientation*v_equatorial,az,alt);
 
 #ifdef PRINT_PERIODIC_POSITION
       std::cout << PrintTime() << " "
-                   "TelescopeLX200::positionReceived" << ra_dec << ": "
+                   "TelescopeLX200::positionReceivedEquatorial" << ra_dec << ": "
                    "J2000(Ra:" << PrintRaInt(ra_int_j2000)
                 << ",Dec:" << PrintDecInt(dec_int_j2000) << "), "
                    "H:" << PrintRaInt(hour_angle_int)
@@ -1039,14 +1092,13 @@ void TelescopeLX200::positionReceived(const LX200RaDec &ra_dec) {
       end_of_last_goto = now + expected_duration;
 
 #ifdef PRINT_PERIODIC_POSITION
-        std::cout << PrintRaInt(hour_angle_int)
-                  << " FORBIDDEN, "
+        std::cout << " FORBIDDEN, "
                      "expecting " << expected_duration << "us for "
                      "GOTO("
                   << "Ra:" << PrintRaInt(goto_ra_int)
                   << ",dec:" << PrintDecInt(goto_dec_int) << ')';
 #endif
-      gotoPosition(LX200RaDec(goto_ra_int,goto_dec_int));
+      gotoPositionEquatorial(LX200RaDec(goto_ra_int,goto_dec_int),true);
     }
 #ifdef PRINT_PERIODIC_POSITION
       std::cout << std:: endl;
@@ -1064,64 +1116,83 @@ public:
   void print(std::ostream &o) const override {o << "CommandGetPos";}
 private:
   void sendGetRaRqu(void) {
+    char buf[5];
+    buf[0] = ':';
+    buf[1] = 'G';
+    buf[2] = (telescope.current_alignment_mode != 'L') ? 'R' : 'Z';
+    buf[3] = '#';
+    buf[4] = '\0';
 #ifdef LOG_GET_POS
     std::cout << PrintTime() << " "
                  "TelescopeLX200::CommandGetPos::sendGetRaRqu: "
-                 "sending :GR#" << std::endl;
+                 "sending " << buf << std::endl;
 #endif
-    telescope.sendRqu(":GR#",4,std::bind(&TelescopeLX200::CommandGetPos::recvGetRaRsp,this));
+    telescope.sendRqu(buf,4,std::bind(&TelescopeLX200::CommandGetPos::recvGetRaRsp,this));
   }
+  
+//  HH:MM.T# or HH:MM:SS#
+//  Land: DDD*MM.M# or DDD*MM:SS#
+
   int recvGetRaRsp(void) {
     if (telescope.recv_used < 8) return 0;
-    const bool long_format = (telescope.recv_buf[5] == ':');
-    if (long_format) {
-      if (telescope.recv_used < 9) return 0;
-    } else {
-      if (telescope.recv_buf[5] != '.') {
+    const char *p = telescope.recv_buf;
+    unsigned int degrees_hours;
+    if (telescope.current_alignment_mode == 'L') {
+      if (!ParseDecimal(p,3,degrees_hours)) {
         std::cout << PrintTime() << " "
                      "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
                   << std::string(telescope.recv_buf,telescope.recv_used)
-                  << "\": neigther long nor short format, ignoring response" << std::endl;
+                  << "\": bad degrees: no number, ignoring response" << std::endl;
+        return -1;
+      }
+      p += 3;
+      if (degrees_hours >= 360) {
+        std::cout << PrintTime() << " "
+                     "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": bad degrees: too big, ignoring response" << std::endl;
+        return -1;
+      }
+      if (*p++ != (char)223) {
+        std::cout << PrintTime() << " "
+                     "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": no degree sign between degrees and minutes, ignoring response" << std::endl;
+        return -1;
+      }
+    } else {
+      if (!ParseDecimal(p,2,degrees_hours)) {
+        std::cout << PrintTime() << " "
+                     "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": bad hours: no number, ignoring response" << std::endl;
+        return -1;
+      }
+      p += 2;
+      if (degrees_hours >= 24) {
+        std::cout << PrintTime() << " "
+                     "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": bad hours: too big, ignoring response" << std::endl;
+        return -1;
+      }
+      if (*p++ != ':') {
+        std::cout << PrintTime() << " "
+                     "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": no ':' between hours and minutes, ignoring response" << std::endl;
         return -1;
       }
     }
-    if (telescope.recv_buf[7+long_format] != '#') {
-      std::cout << PrintTime() << " "
-                   "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
-                << std::string(telescope.recv_buf,telescope.recv_used)
-                << "\": no '#' at end, ignoring response" << std::endl;
-      return -1;
-    }
-    unsigned int hours;
-    if (!ParseDecimal(telescope.recv_buf,2,hours)) {
-      std::cout << PrintTime() << " "
-                   "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
-                << std::string(telescope.recv_buf,telescope.recv_used)
-                << "\": bad hours: no number, ignoring response" << std::endl;
-      return -1;
-    }
-    if (hours >= 24) {
-      std::cout << PrintTime() << " "
-                   "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
-                << std::string(telescope.recv_buf,telescope.recv_used)
-                << "\": bad hours: too big, ignoring response" << std::endl;
-      return -1;
-    }
-    if (telescope.recv_buf[2] != ':') {
-      std::cout << PrintTime() << " "
-                   "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
-                << std::string(telescope.recv_buf,telescope.recv_used)
-                << "\": no ':'l between hours and minutes, ignoring response" << std::endl;
-      return -1;
-    }
     unsigned int minutes;
-    if (!ParseDecimal(telescope.recv_buf+3,2,minutes)) {
+    if (!ParseDecimal(p,2,minutes)) {
       std::cout << PrintTime() << " "
                    "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
                 << std::string(telescope.recv_buf,telescope.recv_used)
                 << "\": bad minutes: no number, ignoring response" << std::endl;
       return -1;
     }
+    p += 2;
     if (minutes >= 60) {
       std::cout << PrintTime() << " "
                    "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
@@ -1129,15 +1200,30 @@ private:
                 << "\": bad minutes: too big, ignoring response" << std::endl;
       return -1;
     }
+    const bool long_format = (*p == ':');
+    if (long_format) {
+      if (telescope.recv_used < (p-telescope.recv_buf)+4) return 0;
+    } else {
+      if (*p != '.') {
+        std::cout << PrintTime() << " "
+                     "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
+                  << std::string(telescope.recv_buf,telescope.recv_used)
+                  << "\": neigther long nor short format, ignoring response" << std::endl;
+        return -1;
+      }
+      if (telescope.recv_used < (p-telescope.recv_buf)+3) return 0;
+    }
+    p++;
     unsigned int seconds;
     if (long_format) {
-      if (!ParseDecimal(telescope.recv_buf+6,2,seconds)) {
+      if (!ParseDecimal(p,2,seconds)) {
         std::cout << PrintTime() << " "
                      "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
                   << std::string(telescope.recv_buf,telescope.recv_used)
                   << "\": bad seconds: no number, ignoring response" << std::endl;
         return -1;
       }
+      p += 2;
       if (seconds >= 60) {
         std::cout << PrintTime() << " "
                      "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
@@ -1153,9 +1239,20 @@ private:
                   << "\": bad deciminutes: no number, ignoring response" << std::endl;
         return -1;
       }
-      seconds += 6;
+      seconds *= 6;
+      p++;
     }
-    ra_dec.ra = (hours*60+minutes)*60+seconds;
+    if (*p++ != '#') {
+      std::cout << PrintTime() << " "
+                   "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
+                << std::string(telescope.recv_buf,telescope.recv_used)
+                << "\": no '#' at end, ignoring response" << std::endl;
+      return -1;
+    }
+    ra_dec.ra = (degrees_hours*60+minutes)*60+seconds;
+    if (telescope.current_alignment_mode == 'L') {
+      ra_dec.ra /= 15;
+    }
 #ifdef LOG_GET_POS
     std::cout << PrintTime() << " "
                  "TelescopeLX200::CommandGetPos::recvGetRaRsp: \""
@@ -1178,12 +1275,18 @@ private:
     telescope.sendMsg(":U#",3,std::move(finished));
   }
   void sendGetDecRqu(void) {
+    char buf[5];
+    buf[0] = ':';
+    buf[1] = 'G';
+    buf[2] = (telescope.current_alignment_mode != 'L') ? 'D' : 'A';
+    buf[3] = '#';
+    buf[4] = '\0';
 #ifdef LOG_GET_POS
     std::cout << PrintTime() << " "
                  "TelescopeLX200::CommandGetPos::sendGetDecRqu: "
-                 "sending :GD#" << std::endl;
+                 "sending " << buf << std::endl;
 #endif
-    telescope.sendRqu(":GD#",4,std::bind(&TelescopeLX200::CommandGetPos::recvGetDecRsp,this));
+    telescope.sendRqu(buf,4,std::bind(&TelescopeLX200::CommandGetPos::recvGetDecRsp,this));
   }
   int recvGetDecRsp(void) {
     if (telescope.recv_used < 7) return 0;
@@ -1223,7 +1326,7 @@ private:
                 << "\": bad degrees: no number, ignoring response" << std::endl;
       return -1;
     }
-      // spec: '*', scope: 223
+      // spec: '*' means "ASCII 223 which appears on the handbox as a degree sign"
     if (telescope.recv_buf[3] != (char)223 && telescope.recv_buf[3] != '*') {
       std::cout << PrintTime() << " "
                    "TelescopeLX200::CommandGetPos::recvGetDecRsp: \""
@@ -1279,7 +1382,7 @@ private:
                 << std::string(telescope.recv_buf,telescope.recv_used)
                 << "\": ok: " << PrintDecSeconds(ra_dec.getDecSign(),ra_dec.getAbsDec()) << std::endl;
 #endif
-    telescope.positionReceived(ra_dec);
+    telescope.positionReceivedEquatorial(ra_dec,telescope.current_alignment_mode != 'L');
     telescope.get_pos_deadline.expires_from_now(boost::posix_time::microseconds(250000));
     telescope.get_pos_deadline.async_wait(
       [t = &telescope](const boost::system::error_code &e) {
@@ -1307,13 +1410,12 @@ void TelescopeLX200::getPos(void) {
 //------------------------------------------------------------------------
 
 
-
-
 class TelescopeLX200::CommandGoto : public TelescopeLX200::Command {
 public:
   CommandGoto(TelescopeLX200 &telescope) : Command(telescope) {}
-  void set(const LX200RaDec &ra_dec) {
+  void set(const LX200RaDec &ra_dec,bool equatorial_or_land) {
     CommandGoto::ra_dec = ra_dec;
+    CommandGoto::equatorial_or_land = equatorial_or_land;
   }
   void execAsync(void) override {
     sendDecRqu();
@@ -1321,27 +1423,48 @@ public:
   void print(std::ostream &o) const override {o << "CommandGoto" << ra_dec;}
 private:
   void sendDecRqu(void) {
-    buf[0] = ':';
-    buf[1] = 'S';
-    buf[2] = 'd';
-    buf[3] = ra_dec.getDecSign() ? '-' : '+';
+    char *p = buf;
+    if (equatorial_or_land) {
+      if (telescope.current_alignment_mode == 'L') {
+        *p++ = ':';
+        *p++ = 'A';
+        *p++ = telescope.startup_alignment_mode;
+        *p++ = '#';
+      }
+    } else {
+      if (telescope.current_alignment_mode != 'L') {
+        *p++ = ':';
+        *p++ = 'A';
+        *p++ = 'L';
+        *p++ = '#';
+      }
+    }
+    p[0] = ':';
+    p[1] = 'S';
+    p[2] = equatorial_or_land ? 'd' : 'a';
+    p[3] = ra_dec.getDecSign() ? '-' : '+';
     unsigned int y = ra_dec.getAbsDec() / 10;
-                             buf[11] = '0' + (char)(ra_dec.getAbsDec()-10*y);
-    unsigned int x = y /  6; buf[10] = '0' + (char)(y- 6*x);
-                             buf[ 9] = ':';
-                 y = x / 10; buf[ 8] = '0' + (char)(x-10*y);
-                 x = y /  6; buf[ 7] = '0' + (char)(y- 6*x);
-                             buf[ 6] = '*';
-                 y = x / 10; buf[ 5] = '0' + (char)(x-10*y);
-                             buf[ 4] = '0' + (char)(     y);
-                             buf[12] = '#';
-                             buf[13] = '\0';
+                             p[11] = '0' + (char)(ra_dec.getAbsDec()-10*y);
+    unsigned int x = y /  6; p[10] = '0' + (char)(y- 6*x);
+                             p[ 9] = ':';
+                 y = x / 10; p[ 8] = '0' + (char)(x-10*y);
+                 x = y /  6; p[ 7] = '0' + (char)(y- 6*x);
+                             p[ 6] = '*';
+                 y = x / 10; p[ 5] = '0' + (char)(x-10*y);
+                             p[ 4] = '0' + (char)(     y);
+                             p[12] = '#';
+                             p[13] = '\0';
     std::cout << PrintTime() << " "
                  "TelescopeLX200::CommandGoto" << ra_dec << "::sendDecRqu: "
                  "sending " << buf << std::endl;
-    telescope.sendRqu(buf,13,std::bind(&TelescopeLX200::CommandGoto::recvDecRsp,this));
+    telescope.sendRqu(buf,(p-buf)+13,std::bind(&TelescopeLX200::CommandGoto::recvDecRsp,this));
   }
   int recvDecRsp(void) {
+    if (equatorial_or_land) {
+      telescope.current_alignment_mode = telescope.startup_alignment_mode;
+    } else {
+      telescope.current_alignment_mode = 'L';
+    }
     if (telescope.recv_buf[0] != '1') {
       std::cout << PrintTime() << " "
                    "TelescopeLX200::CommandGoto" << ra_dec << "::recvDecRsp \""
@@ -1359,7 +1482,7 @@ private:
   void sendRaRqu(void) {
     buf[0] = ':';
     buf[1] = 'S';
-    buf[2] = 'r';
+    buf[2] = equatorial_or_land ? 'r' : 'z';
     unsigned int y = ra_dec.getRa() / 10;
                              buf[10] = '0' + (char)(ra_dec.getRa()-10*y);
     unsigned int x = y /  6; buf[ 9] = '0' + (char)(y- 6*x);
@@ -1384,17 +1507,22 @@ private:
                    "Sr: Bad Response" << std::endl;
       return -1;
     }
+    std::cout << PrintTime() << " "
+                 "TelescopeLX200::CommandGoto" << ra_dec << "::recvRaRsp \""
+              << std::string(telescope.recv_buf,telescope.recv_used) << "\": "
+                 "ok" << std::endl;
     sendGotoRqu();
     return 1;
   }
   void sendGotoRqu(void) {
     buf[0] = ':';
     buf[1] = 'M';
-    buf[2] = 'S';
+    buf[2] = equatorial_or_land ? 'S' : 'A';
     buf[3] = '#';
+    buf[4] = '\0';
     std::cout << PrintTime() << " "
                  "TelescopeLX200::CommandGoto" << ra_dec << "::sendGotoRqu: "
-                 "sending :MS#" << std::endl;
+                 "sending " << buf << std::endl;
     telescope.sendRqu(buf,4,std::bind(&TelescopeLX200::CommandGoto::recvGotoRsp,this));
   }
   int recvGotoRsp(void) {
@@ -1431,31 +1559,38 @@ private:
   }
 private:
   LX200RaDec ra_dec;
-  char buf[14];
+  bool equatorial_or_land;
+  char buf[18];
 };
 
-void TelescopeLX200::gotoPosition(const LX200RaDec &ra_dec) {
+void TelescopeLX200::gotoPositionEquatorial(const LX200RaDec &ra_dec,bool equatorial_or_land) {
   std::cout << PrintTime() << " "
-               "TelescopeLX200::gotoPosition" << ra_dec << std::endl;
+               "TelescopeLX200::gotoPositionEquatorial" << ra_dec
+            << (equatorial_or_land?" eq":" land")
+            << std::endl;
   if (!next_command_goto) {
     next_command_goto = std::make_unique<CommandGoto>(*this);
   }
-  next_command_goto->set(ra_dec);
+  next_command_goto->set(ra_dec,equatorial_or_land);
   doSomething();
 }
 
-void TelescopeLX200::gotoPosition(const unsigned int ra_int_j2000,const int dec_int_j2000) {
-//    if (dec_int_j2000 < -0x40000000 || dec_int_j2000 > 0x40000000) abort();
+void TelescopeLX200::gotoPosition(unsigned int ra_int,int dec_int,
+                                  const CoordinateSystem coordinate_system) {
+  if (coordinate_system == CoordinateSystem::J2000) {
+    const Vector<double,3> v_j2000 = PolarToRect( ra_int * (M_PI/2147483648.0),
+                                                 dec_int * (M_PI/2147483648.0) );
+    const Vector<double,3> v_equatorial = v_j2000*precession_matrix;
+    double ra,dec;
+    RectToPolar(v_equatorial,ra,dec);
+    if (dec < -0.5*M_PI || dec > 0.5*M_PI) abort();
+    ra_int = (unsigned int)floor(0.5+ ra*(2147483648.0/M_PI));
+    dec_int =         (int)floor(0.5+dec*(2147483648.0/M_PI));
+  } else {
+    if (dec_int < -0x40000000 || dec_int > 0x40000000) abort();
+  }
 
-  const Vector<double,3> v0 = PolarToRect( ra_int_j2000 * (M_PI/2147483648.0),
-                                          dec_int_j2000 * (M_PI/2147483648.0) );
-  const Vector<double,3> v = v0*precession_matrix;
-  double ra,dec;
-  RectToPolar(v,ra,dec);
-  if (dec < -0.5*M_PI || dec > 0.5*M_PI) abort();
-  LX200RaDec ra_dec( (unsigned int)floor(0.5+ ra*(2147483648.0/M_PI)),
-                              (int)floor(0.5+dec*(2147483648.0/M_PI)) );
-  gotoPosition(ra_dec);
+  gotoPositionEquatorial(LX200RaDec(ra_int,dec_int),coordinate_system != CoordinateSystem::land);
 }
 
 //------------------------------------------------------------------------

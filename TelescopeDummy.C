@@ -43,7 +43,7 @@ private:
   void handlePeriodic(void) {
     pos_ra += Speed(goto_pos_ra - pos_ra);
     pos_dec += Speed(goto_pos_dec - pos_dec);
-    announce_position(pos_ra,pos_dec);
+    announce_position(pos_ra,pos_dec,CoordinateSystem::J2000);
   }
   void setupTimer(void) {
     timer.async_wait(
@@ -69,7 +69,8 @@ private:
   ~TelescopeDummy(void) {
     opened_closed(false);
   }
-  void gotoPosition(unsigned int ra_int,int dec_int) override {
+  void gotoPosition(unsigned int ra_int,int dec_int,
+                    CoordinateSystem coordinate_system) override {
     std::cout << "TelescopeDummy::gotoPosition("
               << ra_int << ',' << dec_int << ')' << std::endl;
     goto_pos_ra = ra_int;
